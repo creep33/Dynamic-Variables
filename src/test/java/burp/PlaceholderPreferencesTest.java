@@ -35,7 +35,7 @@ class PlaceholderPreferencesTest {
     void savesAndLoadsAnEnabledCustomTag() {
         Map<String, String> preferences = new HashMap<>();
         PlaceholderPreferences.save(preferences::put,
-                new VariableNames.PlaceholderStyle(true, "pentest_2"));
+                new VariableNames.PlaceholderStyle(true, "pentest_2", VariableNames.PlaceholderSyntax.CURLY_BRACES));
 
         VariableNames.PlaceholderStyle restored = PlaceholderPreferences.load(preferences::get, message -> {});
 
@@ -48,7 +48,7 @@ class PlaceholderPreferencesTest {
     void preservesTheChosenTagWhileTaggingIsDisabled() {
         Map<String, String> preferences = new HashMap<>();
         PlaceholderPreferences.save(preferences::put,
-                new VariableNames.PlaceholderStyle(false, "redteam"));
+                new VariableNames.PlaceholderStyle(false, "redteam", VariableNames.PlaceholderSyntax.CURLY_BRACES));
 
         VariableNames.PlaceholderStyle restored = PlaceholderPreferences.load(preferences::get, message -> {});
 

@@ -66,6 +66,7 @@ public final class VariableManager {
     private String refreshStatusCodes = "401, 403";
     private volatile boolean placeholderTagEnabled = false;
     private volatile String placeholderTag = "dv";
+    private volatile VariableNames.PlaceholderSyntax placeholderSyntax = VariableNames.PlaceholderSyntax.CURLY_BRACES;
     private volatile UiLanguage uiLanguage = UiLanguage.ENGLISH;
 
     // UI Components
@@ -203,7 +204,7 @@ public final class VariableManager {
     }
 
     public VariableNames.PlaceholderStyle getPlaceholderStyle() {
-        return new VariableNames.PlaceholderStyle(placeholderTagEnabled, placeholderTag);
+        return new VariableNames.PlaceholderStyle(placeholderTagEnabled, placeholderTag, placeholderSyntax);
     }
 
     public String placeholderFor(String qualifiedName) {
@@ -822,7 +823,7 @@ public final class VariableManager {
         egbc.weightx = 0.0;
         egbc.gridwidth = 1;
         extractionPanel.add(new JLabel(text("Final value template:")), egbc);
-        delimiterField = new JTextField("{{value1}}");
+        delimiterField = new JTextField(placeholderSyntax == VariableNames.PlaceholderSyntax.PARENTHESES ? "((value1))" : "{{value1}}");
         delimiterField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         egbc.gridx = 1;
         egbc.weightx = 1.0;
@@ -1094,6 +1095,10 @@ public final class VariableManager {
                 return this;
             }
         });
+        
+        JComboBox<String> syntaxComboBox = new JComboBox<>(new String[]{"{{variable}}", "((variable))"});
+        syntaxComboBox.setSelectedIndex(placeholderSyntax == VariableNames.PlaceholderSyntax.PARENTHESES ? 1 : 0);
+
         JCheckBox tagEnabledCheckBox = new JCheckBox(text("Use a tag in variable placeholders"), placeholderTagEnabled);
         JCheckBox diagnosticCheckBox = new JCheckBox(
                 text("Enable auto-extraction diagnostic logs"), extractionDebugEnabled);
@@ -1124,14 +1129,18 @@ public final class VariableManager {
             boolean valid = !enabled || VariableNames.isValidTag(candidate);
             validationLabel.setText(valid ? " "
                     : text("The tag must start with a letter and contain only letters, numbers, _ or -. "));
+            VariableNames.PlaceholderSyntax previewSyntax = syntaxComboBox.getSelectedIndex() == 1 
+                    ? VariableNames.PlaceholderSyntax.PARENTHESES 
+                    : VariableNames.PlaceholderSyntax.CURLY_BRACES;
             previewLabel.setText(text("Example: ") + (valid
                     ? VariableNames.placeholder("token", new VariableNames.PlaceholderStyle(enabled,
-                            enabled ? candidate : ""))
-                    : "{{tag:token}}"));
+                            enabled ? candidate : "", previewSyntax))
+                    : (previewSyntax == VariableNames.PlaceholderSyntax.PARENTHESES ? "((tag:token))" : "{{tag:token}}")));
         };
 
         tagEnabledCheckBox.addActionListener(e -> updateState.run());
         tagField.getDocument().addDocumentListener(new SimpleDocumentListener(updateState::run));
+        syntaxComboBox.addActionListener(e -> updateState.run());
         updateState.run();
 
         JPanel panel = new JPanel(new GridBagLayout());
@@ -1146,8 +1155,12 @@ public final class VariableManager {
         gbc.gridy = 1;
         panel.add(languageComboBox, gbc);
         gbc.gridy = 2;
-        panel.add(tagEnabledCheckBox, gbc);
+        panel.add(new JLabel(text("Syntax:")), gbc);
         gbc.gridy = 3;
+        panel.add(syntaxComboBox, gbc);
+        gbc.gridy = 4;
+        panel.add(tagEnabledCheckBox, gbc);
+        gbc.gridy = 5;
         gbc.gridwidth = 1;
         gbc.weightx = 0;
         panel.add(new JLabel(text("Tag:")), gbc);
@@ -1155,12 +1168,12 @@ public final class VariableManager {
         gbc.weightx = 1;
         panel.add(tagField, gbc);
         gbc.gridx = 0;
-        gbc.gridy = 4;
+        gbc.gridy = 6;
         gbc.gridwidth = 2;
         panel.add(previewLabel, gbc);
-        gbc.gridy = 5;
+        gbc.gridy = 7;
         panel.add(validationLabel, gbc);
-        gbc.gridy = 6;
+        gbc.gridy = 8;
         JPanel behaviorNotice = new JPanel();
         behaviorNotice.setLayout(new BoxLayout(behaviorNotice, BoxLayout.Y_AXIS));
         behaviorNotice.add(new JLabel(text("Existing requests are not rewritten automatically. When tagging is enabled,")));
@@ -1266,6 +1279,9 @@ public final class VariableManager {
 
         placeholderTagEnabled = enabled;
         if (!tag.isEmpty()) placeholderTag = tag;
+        placeholderSyntax = syntaxComboBox.getSelectedIndex() == 1 
+                ? VariableNames.PlaceholderSyntax.PARENTHESES 
+                : VariableNames.PlaceholderSyntax.CURLY_BRACES;
         extractionEnabled = extractionEnabledCheckBox.isSelected();
         sessionRecoveryEnabled = recoveryEnabledCheckBox.isSelected();
         refreshStatusCodes = statusCodesField.getText().trim();
@@ -1342,7 +1358,7 @@ public final class VariableManager {
             sourceComboBox.setEnabled(false);
             regexField.setText("");
             regexField.setEnabled(false);
-            delimiterField.setText("{{value1}}");
+            delimiterField.setText(placeholderSyntax == VariableNames.PlaceholderSyntax.PARENTHESES ? "((value1))" : "{{value1}}");
             delimiterField.setEnabled(false);
             removeExtractionZoneButton.setEnabled(false);
             updateRuleButton.setEnabled(false);
@@ -1471,7 +1487,7 @@ public final class VariableManager {
         extractionZoneComboBox.setEnabled(false);
         sourceComboBox.setSelectedIndex(0);
         regexField.setText("");
-        delimiterField.setText("{{value1}}");
+        delimiterField.setText(placeholderSyntax == VariableNames.PlaceholderSyntax.PARENTHESES ? "((value1))" : "{{value1}}");
         removeExtractionZoneButton.setEnabled(false);
         updateRuleButton.setEnabled(false);
         savedRequestLabel.setText(text("Saved Request: None"));
@@ -2559,6 +2575,7 @@ public final class VariableManager {
                         api.persistence().preferences()::getString, api.logging()::logToError);
                 placeholderTagEnabled = placeholderStyle.tagEnabled();
                 placeholderTag = placeholderStyle.tag();
+                placeholderSyntax = placeholderStyle.syntax();
                 uiLanguage = PlaceholderPreferences.loadLanguage(api.persistence().preferences()::getString);
                 String ungroupedPref = api.persistence().preferences().getString("dynamic_variables_ungrouped_expanded");
                 if (ungroupedPref != null) ungroupedExpanded = Boolean.parseBoolean(ungroupedPref);

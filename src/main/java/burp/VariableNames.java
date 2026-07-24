@@ -12,16 +12,24 @@ final class VariableNames {
     private static final Pattern TAG = Pattern.compile("[A-Za-z][A-Za-z0-9_-]*");
     private static final Map<PlaceholderStyle, Pattern> PLACEHOLDER_PATTERNS = new ConcurrentHashMap<>();
 
-    record PlaceholderStyle(boolean tagEnabled, String tag) {
+    enum PlaceholderSyntax {
+        CURLY_BRACES,
+        PARENTHESES
+    }
+
+    record PlaceholderStyle(boolean tagEnabled, String tag, PlaceholderSyntax syntax) {
         PlaceholderStyle {
             tag = tag == null ? "" : tag.trim();
             if (tagEnabled && !isValidTag(tag)) {
                 throw new IllegalArgumentException("Invalid placeholder tag: " + tag);
             }
+            if (syntax == null) {
+                syntax = PlaceholderSyntax.CURLY_BRACES;
+            }
         }
 
         static PlaceholderStyle untagged() {
-            return new PlaceholderStyle(false, "");
+            return new PlaceholderStyle(false, "", PlaceholderSyntax.CURLY_BRACES);
         }
     }
 
@@ -58,6 +66,9 @@ final class VariableNames {
     static String placeholder(String variableName, PlaceholderStyle style) {
         PlaceholderStyle activeStyle = style == null ? PlaceholderStyle.untagged() : style;
         String prefix = activeStyle.tagEnabled() ? activeStyle.tag() + ":" : "";
+        if (activeStyle.syntax() == PlaceholderSyntax.PARENTHESES) {
+            return "((" + prefix + variableName + "))";
+        }
         return "{{" + prefix + variableName + "}}";
     }
 
@@ -164,9 +175,11 @@ final class VariableNames {
 
     private static Pattern placeholderPattern(PlaceholderStyle style) {
         PlaceholderStyle activeStyle = style == null ? PlaceholderStyle.untagged() : style;
-        PlaceholderStyle cacheKey = activeStyle.tagEnabled() ? activeStyle : PlaceholderStyle.untagged();
-        return PLACEHOLDER_PATTERNS.computeIfAbsent(cacheKey, key -> {
+        return PLACEHOLDER_PATTERNS.computeIfAbsent(activeStyle, key -> {
             String prefix = key.tagEnabled() ? Pattern.quote(key.tag() + ":") : "";
+            if (key.syntax() == PlaceholderSyntax.PARENTHESES) {
+                return Pattern.compile("\\(\\(" + prefix + "([^()]+)\\)\\)");
+            }
             return Pattern.compile("\\{\\{" + prefix + "([^{}]+)}}");
         });
     }

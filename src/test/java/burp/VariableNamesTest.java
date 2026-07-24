@@ -45,12 +45,12 @@ class VariableNamesTest {
         assertEquals("{{token}}", VariableNames.placeholder(
                 "token", VariableNames.PlaceholderStyle.untagged()));
         assertEquals("{{dv:alice.token}}", VariableNames.placeholder(
-                "alice.token", new VariableNames.PlaceholderStyle(true, "dv")));
+                "alice.token", new VariableNames.PlaceholderStyle(true, "dv", VariableNames.PlaceholderSyntax.CURLY_BRACES)));
     }
 
     @Test
     void taggedModeOnlyReplacesTheExactConfiguredTag() {
-        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "dv");
+        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "dv", VariableNames.PlaceholderSyntax.CURLY_BRACES);
         String request = "active={{dv:token}} untagged={{token}} other={{other:token}} ssti={{7*7}}";
 
         assertEquals("active=secret untagged={{token}} other={{other:token}} ssti={{7*7}}",
@@ -59,7 +59,7 @@ class VariableNamesTest {
 
     @Test
     void disabledTaggingKeepsLegacyReplacementBehavior() {
-        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(false, "dv");
+        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(false, "dv", VariableNames.PlaceholderSyntax.CURLY_BRACES);
         String request = "legacy={{token}} tagged={{dv:token}}";
 
         assertEquals("legacy=secret tagged={{dv:token}}",
@@ -68,7 +68,7 @@ class VariableNamesTest {
 
     @Test
     void customTagsAreCaseSensitive() {
-        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "Pentest");
+        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "Pentest", VariableNames.PlaceholderSyntax.CURLY_BRACES);
         String request = "a={{Pentest:id}}&b={{pentest:id}}";
 
         assertEquals("a=42&b={{pentest:id}}",
@@ -77,18 +77,18 @@ class VariableNamesTest {
 
     @Test
     void placeholderStyleTrimsTagsAndRejectsInvalidEnabledTags() {
-        VariableNames.PlaceholderStyle trimmed = new VariableNames.PlaceholderStyle(true, "  dv  ");
+        VariableNames.PlaceholderStyle trimmed = new VariableNames.PlaceholderStyle(true, "  dv  ", VariableNames.PlaceholderSyntax.CURLY_BRACES);
 
         assertEquals("dv", trimmed.tag());
         assertThrows(IllegalArgumentException.class,
-                () -> new VariableNames.PlaceholderStyle(true, "bad:tag"));
+                () -> new VariableNames.PlaceholderStyle(true, "bad:tag", VariableNames.PlaceholderSyntax.CURLY_BRACES));
         assertThrows(IllegalArgumentException.class,
-                () -> new VariableNames.PlaceholderStyle(true, ""));
+                () -> new VariableNames.PlaceholderStyle(true, "", VariableNames.PlaceholderSyntax.CURLY_BRACES));
     }
 
     @Test
     void taggedMaterializationOnlyReportsUnknownVariablesUsingTheActiveTag() {
-        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "dv");
+        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "dv", VariableNames.PlaceholderSyntax.CURLY_BRACES);
 
         VariableNames.MaterializationResult result = VariableNames.materializePlaceholders(
                 "{{dv:known}} {{dv:missing}} {{missing}} {{qa:missing}}",
@@ -220,7 +220,7 @@ class VariableNamesTest {
 
     @Test
     void detectsAndRemapsFoldersUsingTaggedSyntaxOnly() {
-        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "dv");
+        VariableNames.PlaceholderStyle style = new VariableNames.PlaceholderStyle(true, "dv", VariableNames.PlaceholderSyntax.CURLY_BRACES);
         String text = "{{dv:user1.id}} {{user1.id}} {{other:user1.id}}";
 
         assertEquals(java.util.List.of("user1"), VariableNames.detectPlaceholderFolders(text, style));

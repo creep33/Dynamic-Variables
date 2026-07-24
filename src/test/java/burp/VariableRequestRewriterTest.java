@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VariableRequestRewriterTest {
     private static final VariableNames.PlaceholderStyle TAGGED =
-            new VariableNames.PlaceholderStyle(true, "dv");
+            new VariableNames.PlaceholderStyle(true, "dv", VariableNames.PlaceholderSyntax.CURLY_BRACES);
 
     @Test
     void rewritesPathHeadersAndBodyAndReportsVariablesOnce() {
@@ -95,8 +95,8 @@ class VariableRequestRewriterTest {
     void capturedStyleCanBeReusedAfterAConfigurationChange() {
         VariableRequestRewriter.RequestParts request = request(
                 "/{{dv:token}}/{{qa:token}}", List.of(), "");
-        VariableNames.PlaceholderStyle capturedStyle = new VariableNames.PlaceholderStyle(true, "dv");
-        VariableNames.PlaceholderStyle currentStyle = new VariableNames.PlaceholderStyle(true, "qa");
+        VariableNames.PlaceholderStyle capturedStyle = new VariableNames.PlaceholderStyle(true, "dv", VariableNames.PlaceholderSyntax.CURLY_BRACES);
+        VariableNames.PlaceholderStyle currentStyle = new VariableNames.PlaceholderStyle(true, "qa", VariableNames.PlaceholderSyntax.CURLY_BRACES);
 
         VariableRequestRewriter.RewriteResult retry = VariableRequestRewriter.rewrite(
                 request, Map.of("token", "secret"), capturedStyle);
