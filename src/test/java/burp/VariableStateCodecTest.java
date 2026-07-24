@@ -39,7 +39,7 @@ class VariableStateCodecTest {
     }
 
     @Test
-    void readsVersionTwoStateAndWritesVersionThree() {
+    void readsVersionTwoStateAndWritesCurrentVersion() {
         VariableDefinition variable = new VariableDefinition(
                 "id", "token", null, "value",
                 new VariableExtractionRule(true, "/token", "body", "token=(.+)"), 0);
@@ -48,7 +48,7 @@ class VariableStateCodecTest {
 
         VariableStateCodec.State decoded = VariableStateCodec.decode(versionTwo);
 
-        assertEquals("3", VariableStateCodec.VERSION);
+        assertEquals("5", VariableStateCodec.VERSION);
         assertEquals("token", decoded.variables().get(0).getName());
         assertEquals(VariableExtractionRule.MatchStrategy.LEGACY_PATH,
                 decoded.variables().get(0).getRule().getMatchStrategy());

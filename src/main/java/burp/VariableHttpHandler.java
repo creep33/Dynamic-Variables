@@ -167,6 +167,7 @@ public class VariableHttpHandler implements HttpHandler {
             } else {
                 debug(messageId, entry.getKey(), evaluation.outcome());
                 if (evaluation.outcome() == ExtractionOutcome.INVALID_REGEX
+                        || evaluation.outcome() == ExtractionOutcome.INVALID_TEMPLATE
                         || evaluation.outcome() == ExtractionOutcome.MISSING_CAPTURE_GROUP) {
                     api.logging().logToError("[DynamicVariables][AutoExtraction] message=" + messageId
                             + " variable=\"" + entry.getKey() + "\" result=" + evaluation.outcome());

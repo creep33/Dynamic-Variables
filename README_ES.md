@@ -42,6 +42,7 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 | 13 | **Materialización de variables en Repeater** | Previsualiza y sustituye permanentemente todos los placeholders conocidos de una petición editable de Repeater por sus valores de texto actuales. |
 | 14 | **Etiqueta de placeholder configurable** | Permite exigir una etiqueta personalizada como `dv`, de modo que solo se sustituya `{{dv:variable_name}}` y los demás payloads de pentesting con formato `{{...}}` permanezcan intactos. |
 | 15 | **Interfaz en inglés y español** | Permite elegir el idioma de toda la extensión desde **Configuración...**. El idioma predeterminado es inglés y la selección se conserva entre sesiones de Burp. |
+| 16 | **Extracción de múltiples valores** | Activa un modo múltiple opcional al asignar una variable. Cada valor nombrado conserva su selección, origen y regex, y una plantilla editable como `{{valor1}}; {{valor2}}` compone el valor de la variable padre. |
 
 ---
 
@@ -98,10 +99,13 @@ Con la etiqueta `dv`, utiliza `{{dv:token}}` o `{{dv:alice.token}}`. Solo se sus
 3. Selecciona el valor del token en el cuerpo o las cabeceras de la respuesta.
 4. Haz clic derecho sobre el texto seleccionado y pulsa **Asignar a variable...**.
 5. Busca una carpeta escribiendo en el campo. Selecciona una coincidencia existente, conserva **Sin carpeta** o crea la carpeta introducida sin salir del diálogo.
-6. Selecciona o escribe el nombre de la variable. El **Patrón regex** se genera automáticamente. Si la variable ya existe en esa carpeta, elige si quieres actualizarla o crear otra con un nombre diferente.
-7. Mantén marcada **Guardar esta petición para actualizar el token en el futuro** si la variable participará en la recuperación de sesión.
-8. Elige si quieres activar la extracción pasiva y la recuperación de sesiones caducadas para la variable. Ambas permanecen desactivadas si no se seleccionan explícitamente.
-9. Pulsa **Guardar regla** y revisa en el panel el método, servicio, ruta, query opcional y discriminador de petición explícitos.
+6. En **Variable y configuración**, selecciona o escribe el nombre y configura la petición y la automatización comunes.
+7. Abre **Valores y extracción**. El **Patrón regex** de la selección original se genera automáticamente.
+8. Mantén marcada **Guardar esta petición para actualizar el token en el futuro** si la variable participará en la recuperación de sesión.
+9. Elige si quieres activar la extracción pasiva y la recuperación de sesiones caducadas para la variable. Ambas permanecen desactivadas si no se seleccionan explícitamente.
+10. Pulsa **Guardar regla** y revisa en el panel el método, servicio, ruta, query opcional y discriminador de petición explícitos.
+
+Para construir una variable padre a partir de varios fragmentos de la respuesta, activa **Extraer múltiples valores** en el diálogo de asignación. La selección original pasa a ser `valor1`. Pulsa **Añadir valor que extraer...**, selecciona otro fragmento en el mensaje HTTP mostrado y repite el proceso. Utiliza el selector de valores para cambiar entre `valor1`, `valor2` y las demás reglas sin mostrar todos los editores a la vez. La plantilla final se genera como `{{valor1}}; {{valor2}}`, se puede editar y determina exactamente el valor almacenado en la variable padre.
 
 ### 3. Utilizar la pestaña Dynamic Variables del editor de peticiones
 

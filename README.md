@@ -42,6 +42,7 @@ Dynamic Variables is a Burp Suite extension that brings template variables and a
 | 13 | **Materialize Repeater Variables** | Preview and permanently replace all known placeholders in an editable Repeater request with their current text values for direct testing without variables. |
 | 14 | **Configurable Placeholder Tag** | Optionally require a custom tag such as `dv` so only `{{dv:variable_name}}` is substituted and unrelated `{{...}}` pentesting payloads remain untouched. |
 | 15 | **English and Spanish Interface** | Choose the language used throughout the extension from **Configuration...**. English is used by default and the selected language is saved between Burp sessions. |
+| 16 | **Multiple-value Extraction** | Enable an optional multiple-value mode while assigning a variable. Each named value keeps its own selection, source, and regex, and an editable template such as `{{value1}}; {{value2}}` composes the parent value. |
 
 ---
 
@@ -96,10 +97,13 @@ With the tag `dv`, use `{{dv:token}}` or `{{dv:alice.token}}`. Only placeholders
 3. Highlight the token value inside the response body or headers.
 4. Right-click the highlighted text and click **Assign to Variable...**.
 5. Search for a folder by typing in the folder field. Select an existing match, keep **Ungrouped**, or create the entered folder without leaving the dialog.
-6. Select or type a variable name. The **Regex Pattern** is automatically generated for you. If the variable already exists in that folder, choose whether to update it or create a new variable under another name.
-7. Keep **Save this request to refresh token in the future** checked if the variable will participate in session recovery.
-8. Choose whether to enable passive extraction and expired-session recovery for the variable. Both remain disabled unless selected explicitly.
-9. Click **Save Rule**, then review the explicit method, service, path, optional query, and request discriminator in the dashboard.
+6. In **Variable and configuration**, select or type a variable name and configure the common request and automation settings.
+7. Open **Values and extraction**. The **Regex Pattern** for the original selection is automatically generated for you.
+8. Keep **Save this request to refresh token in the future** checked if the variable will participate in session recovery.
+9. Choose whether to enable passive extraction and expired-session recovery for the variable. Both remain disabled unless selected explicitly.
+10. Click **Save Rule**, then review the explicit method, service, path, optional query, and request discriminator in the dashboard.
+
+To build one parent value from several response fragments, enable **Extract multiple values** in the assignment dialog. The original selection becomes `value1`. Click **Add value to extract...**, select another fragment in the displayed HTTP message, and repeat as needed. Use the value selector to switch between `value1`, `value2`, and the remaining extraction rules without displaying every editor at once. The final template is generated as `{{value1}}; {{value2}}`, remains editable, and determines the exact value stored in the parent variable.
 
 ### 3. Using the Dynamic Variables Request Tab
 1. Open the **Repeater** tab.

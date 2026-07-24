@@ -94,4 +94,113 @@ class ExtractionEngineTest {
         assertEquals(ExtractionOutcome.REGEX_NO_MATCH,
                 ExtractionEngine.extract(rule, request(), response()).outcome());
     }
+
+    @Test
+    void extractsAndConcatenatesMultipleTargets() {
+        VariableExtractionRule rule = explicitRule();
+        rule.setTargets(List.of(
+                new VariableExtractionRule.ExtractionTarget(
+                        VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS, "session=([^;]+)"),
+                new VariableExtractionRule.ExtractionTarget(
+                        VariableExtractionRule.ExtractionSource.RESPONSE_BODY, "\"accessToken\":\"([^\"]+)\"")
+        ));
+        rule.setJoinDelimiter("; ");
+
+        ExtractionEngine.Evaluation eval = ExtractionEngine.extract(rule, request(), response());
+        assertEquals(ExtractionOutcome.UPDATED, eval.outcome());
+        assertEquals("cookie-123; body-123", eval.value());
+    }
+
+    @Test
+    void buildsOneParentValueFromMultipleSetCookieHeadersInOrder() {
+        VariableExtractionRule rule = explicitRule();
+        rule.setTargets(List.of(
+                cookieTarget("_interaction"),
+                cookieTarget("_interaction_resume"),
+                cookieTarget("_session"),
+                cookieTarget("_session\\.legacy")
+        ));
+
+        ExtractionEngine.ResponseSnapshot cookieResponse = new ExtractionEngine.ResponseSnapshot(
+                List.of(
+                        "Set-Cookie: _interaction=gyiw7WCiu3Tr5bHsAi5UR; path=/interaction",
+                        "Set-Cookie: _interaction_resume=gyiw7WCiu3Tr5bHsAi5UR; path=/auth",
+                        "Set-Cookie: _session=dhsmjttC7q4nRxrYMJrD9; path=/",
+                        "Set-Cookie: _session.legacy=dhsmjttC7q4nRxrYMJrD9; path=/"
+                ), "");
+
+        ExtractionEngine.Evaluation eval = ExtractionEngine.extract(rule, request(), cookieResponse);
+
+        assertEquals(ExtractionOutcome.UPDATED, eval.outcome());
+        assertEquals("_interaction=gyiw7WCiu3Tr5bHsAi5UR"
+                        + "; _interaction_resume=gyiw7WCiu3Tr5bHsAi5UR"
+                        + "; _session=dhsmjttC7q4nRxrYMJrD9"
+                        + "; _session.legacy=dhsmjttC7q4nRxrYMJrD9",
+                eval.value());
+    }
+
+    @Test
+    void composesNamedCapturesUsingTheEditableFinalTemplate() {
+        VariableExtractionRule rule = explicitRule();
+        rule.setTargets(List.of(
+                new VariableExtractionRule.ExtractionTarget(
+                        "valor1", VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS,
+                        "_interaction=([^;]+)"),
+                new VariableExtractionRule.ExtractionTarget(
+                        "valor2", VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS,
+                        "_session=([^;]+)")
+        ));
+        rule.setValueTemplate("_interaction={{valor1}}; _session={{valor2}}");
+        ExtractionEngine.ResponseSnapshot cookieResponse = new ExtractionEngine.ResponseSnapshot(
+                List.of(
+                        "Set-Cookie: _interaction=abc123; path=/interaction",
+                        "Set-Cookie: _session=xyz789; path=/"
+                ), "");
+
+        ExtractionEngine.Evaluation eval = ExtractionEngine.extract(rule, request(), cookieResponse);
+
+        assertEquals(ExtractionOutcome.UPDATED, eval.outcome());
+        assertEquals("_interaction=abc123; _session=xyz789", eval.value());
+    }
+
+    @Test
+    void rejectsAParentTemplateThatOmitsOrReferencesUnknownValues() {
+        VariableExtractionRule rule = explicitRule();
+        rule.setTargets(List.of(
+                new VariableExtractionRule.ExtractionTarget(
+                        "valor1", VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS,
+                        "session=([^;]+)"),
+                new VariableExtractionRule.ExtractionTarget(
+                        "valor2", VariableExtractionRule.ExtractionSource.RESPONSE_BODY,
+                        "\"accessToken\":\"([^\"]+)\"")
+        ));
+        rule.setValueTemplate("{{valor1}}; {{desconocido}}");
+
+        ExtractionEngine.Evaluation eval = ExtractionEngine.extract(rule, request(), response());
+
+        assertEquals(ExtractionOutcome.INVALID_TEMPLATE, eval.outcome());
+        assertNull(eval.value());
+    }
+
+    @Test
+    void doesNotPartiallyUpdateTheParentWhenOneZoneDoesNotMatch() {
+        VariableExtractionRule rule = explicitRule();
+        rule.setTargets(List.of(
+                cookieTarget("_interaction"),
+                cookieTarget("_missing")
+        ));
+        ExtractionEngine.ResponseSnapshot cookieResponse = new ExtractionEngine.ResponseSnapshot(
+                List.of("Set-Cookie: _interaction=value; path=/"), "");
+
+        ExtractionEngine.Evaluation eval = ExtractionEngine.extract(rule, request(), cookieResponse);
+
+        assertEquals(ExtractionOutcome.REGEX_NO_MATCH, eval.outcome());
+        assertNull(eval.value());
+    }
+
+    private static VariableExtractionRule.ExtractionTarget cookieTarget(String cookieNameRegex) {
+        return new VariableExtractionRule.ExtractionTarget(
+                VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS,
+                "Set-Cookie: (" + cookieNameRegex + "=[^;]+)");
+    }
 }

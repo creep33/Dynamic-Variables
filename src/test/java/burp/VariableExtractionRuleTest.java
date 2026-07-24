@@ -2,6 +2,8 @@ package burp;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class VariableExtractionRuleTest {
@@ -58,5 +60,43 @@ class VariableExtractionRuleTest {
         assertFalse(rule.isEnabled());
         assertFalse(rule.isAutomaticRefreshEnabled());
         assertFalse(rule.isAllowNonIdempotentReplay());
+    }
+
+    @Test
+    void v5RoundTripPreservesNamedTargetsAndFinalValueTemplate() {
+        VariableExtractionRule rule = new VariableExtractionRule();
+        rule.setTargets(List.of(
+                new VariableExtractionRule.ExtractionTarget(
+                        "valor1",
+                        VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS,
+                        "Set-Cookie: (_interaction=[^;]+)"),
+                new VariableExtractionRule.ExtractionTarget(
+                        "valor2",
+                        VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS,
+                        "Set-Cookie: (_session\\.legacy=[^;]+)")
+        ));
+        rule.setValueTemplate("Cookie: {{valor1}}; {{valor2}}");
+
+        VariableExtractionRule decoded = VariableExtractionRule.deserialize(rule.serialize());
+
+        assertEquals(rule.getTargets(), decoded.getTargets());
+        assertEquals("Cookie: {{valor1}}; {{valor2}}", decoded.getValueTemplate());
+    }
+
+    @Test
+    void removingTargetsKeepsTheLegacyPrimaryAccessorsInSync() {
+        VariableExtractionRule rule = new VariableExtractionRule();
+        rule.setTargets(List.of(
+                new VariableExtractionRule.ExtractionTarget(
+                        VariableExtractionRule.ExtractionSource.RESPONSE_BODY, "(first)"),
+                new VariableExtractionRule.ExtractionTarget(
+                        VariableExtractionRule.ExtractionSource.RESPONSE_HEADERS, "(second)")
+        ));
+
+        rule.removeTarget(0);
+
+        assertEquals("headers", rule.getSource());
+        assertEquals("(second)", rule.getRegex());
+        assertThrows(IllegalStateException.class, () -> rule.removeTarget(0));
     }
 }

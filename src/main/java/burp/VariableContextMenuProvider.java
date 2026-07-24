@@ -411,6 +411,31 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
     private record RequestRemapResult(HttpRequest request, List<String> replacedVariables,
                                       List<String> unmatchedVariables) {}
 
+    private record SelectedExtraction(String selectedText, String source, String regex) {}
+
+    private final class ExtractionValueEditor {
+        private final String name;
+        private final String selectedValue;
+        private final JComboBox<String> sourceComboBox;
+        private final JTextField regexField;
+
+        private ExtractionValueEditor(String name, SelectedExtraction extraction) {
+            this.name = name;
+            this.selectedValue = extraction.selectedText();
+            this.sourceComboBox = new JComboBox<>(new String[]{
+                    text("Response Body"), text("Response Headers"),
+                    text("Request Body"), text("Request Headers")
+            });
+            this.sourceComboBox.setSelectedIndex(sourceIndex(extraction.source()));
+            this.regexField = new JTextField(extraction.regex(), 50);
+        }
+
+        private VariableExtractionRule.ExtractionTarget target() {
+            return new VariableExtractionRule.ExtractionTarget(
+                    name, extractionSource(sourceComboBox.getSelectedIndex()), regexField.getText().trim());
+        }
+    }
+
     private void showConfigDialog(ContextMenuEvent event) {
         MessageEditorHttpRequestResponse reqResp = event.messageEditorRequestResponse().get();
         Range range = reqResp.selectionOffsets().get();
@@ -437,48 +462,29 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
             JOptionPane.showMessageDialog(suiteFrame, text("Invalid selection range."), text("Error"), JOptionPane.ERROR_MESSAGE);
             return;
         }
-        String selectedText = textStr.substring(start, end);
-
-        // Determine if selection is in headers or body
-        int doubleNewline = textStr.indexOf("\r\n\r\n");
-        int separatorLength = 4;
-        if (doubleNewline < 0) {
-            doubleNewline = textStr.indexOf("\n\n");
-            separatorLength = 2;
-        }
-
-        String source = isRequest ? "request_body" : "body";
-        String contextText = textStr;
-        int contextStart = start;
-        int contextEnd = end;
-
-        if (doubleNewline >= 0) {
-            if (start < doubleNewline) {
-                source = isRequest ? "request_headers" : "headers";
-                contextText = textStr.substring(0, doubleNewline);
-            } else {
-                source = isRequest ? "request_body" : "body";
-                contextText = textStr.substring(doubleNewline + separatorLength);
-                contextStart = Math.max(0, start - (doubleNewline + separatorLength));
-                contextEnd = Math.max(0, end - (doubleNewline + separatorLength));
-            }
-        }
-
-        // Generate proposed regex
-        String proposedRegex = generateProposedRegex(contextText, contextStart, contextEnd);
+        SelectedExtraction initialExtraction = analyzeSelection(textStr, start, end, isRequest);
+        String selectedText = initialExtraction.selectedText();
+        String source = initialExtraction.source();
+        String proposedRegex = initialExtraction.regex();
 
         // Build the Swing dialog
         Frame suiteFrame = api.userInterface().swingUtils().suiteFrame();
         JDialog dialog = new JDialog(suiteFrame, text("Assign to Variable"), Dialog.ModalityType.APPLICATION_MODAL);
         dialog.setLayout(new BorderLayout(10, 10));
-        dialog.setSize(720, 620);
-        dialog.setLocationRelativeTo(suiteFrame);
+        Runnable[] fitDialogToContent = {() -> {}};
 
+        JTabbedPane dialogTabs = new JTabbedPane();
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(new EmptyBorder(10, 10, 10, 10));
+        JPanel extractionTabPanel = new JPanel(new GridBagLayout());
+        extractionTabPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
+        dialogTabs.addTab(text("Variable and configuration"), panel);
+        dialogTabs.addTab(text("Values and extraction"), extractionTabPanel);
+
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.NORTHWEST;
         gbc.gridx = 0;
 
         // Row 0: Folder
@@ -627,38 +633,101 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
             }
         });
 
-        // Row 2: Selected Value (Read-only scrollpane)
-        gbc.gridy = 2;
-        gbc.gridx = 0;
-        gbc.weightx = 0.0;
-        panel.add(new JLabel(text("Selected Value:")), gbc);
+        GridBagConstraints xgbc = new GridBagConstraints();
+        xgbc.fill = GridBagConstraints.HORIZONTAL;
+        xgbc.insets = new Insets(5, 5, 5, 5);
+        xgbc.anchor = GridBagConstraints.NORTHWEST;
 
+        // Extraction tab, row 0: Optional multiple-value mode
+        xgbc.gridy = 0;
+        xgbc.gridx = 0;
+        xgbc.gridwidth = 2;
+        JCheckBox multipleValuesCheckBox = new JCheckBox(text("Extract multiple values"), false);
+        multipleValuesCheckBox.setToolTipText(text(
+                "Each value has its own source and regex. The final template combines them into the parent variable."));
+        extractionTabPanel.add(multipleValuesCheckBox, xgbc);
+
+        // Extraction tab, row 1: Selected Value (single-value mode)
+        xgbc.gridy = 1;
+        xgbc.gridx = 0;
+        xgbc.gridwidth = 1;
+        xgbc.weightx = 0.0;
+        JLabel selectedValueLabel = new JLabel(text("Selected Value:"));
+        extractionTabPanel.add(selectedValueLabel, xgbc);
         JTextArea valuePreview = new JTextArea(3, 20);
         valuePreview.setText(selectedText);
         valuePreview.setEditable(false);
         valuePreview.setLineWrap(true);
         valuePreview.setWrapStyleWord(true);
         valuePreview.setBackground(panel.getBackground());
-        gbc.gridx = 1;
-        gbc.weightx = 1.0;
-        panel.add(new JScrollPane(valuePreview), gbc);
+        xgbc.gridx = 1;
+        xgbc.weightx = 1.0;
+        JScrollPane valuePreviewScroll = new JScrollPane(valuePreview);
+        extractionTabPanel.add(valuePreviewScroll, xgbc);
 
-        // Row 3: Match URL/Path
-        gbc.gridy = 3;
+        // Extraction tab, row 2: Multiple extraction values
+        String targetPrefix = text("value");
+        List<ExtractionValueEditor> extractionEditors = new ArrayList<>();
+        extractionEditors.add(new ExtractionValueEditor(targetPrefix + "1", initialExtraction));
+        JComboBox<String> extractionValueSelector = new JComboBox<>();
+        JPanel extractionValueDetails = new JPanel(new GridBagLayout());
+        JButton addExtractionValueButton = new JButton(text("Add value to extract..."));
+        JButton removeExtractionValueButton = new JButton(text("Remove value"));
+        JPanel selectorPanel = new JPanel(new BorderLayout(8, 0));
+        selectorPanel.add(new JLabel(text("Value to extract:")), BorderLayout.WEST);
+        selectorPanel.add(extractionValueSelector, BorderLayout.CENTER);
+        JPanel extractionButtons = new JPanel(new GridLayout(1, 2, 8, 0));
+        extractionButtons.add(addExtractionValueButton);
+        extractionButtons.add(removeExtractionValueButton);
+        JPanel multipleValuesPanel = new JPanel(new BorderLayout(5, 5));
+        multipleValuesPanel.setBorder(BorderFactory.createTitledBorder(text("Values to extract")));
+        multipleValuesPanel.add(selectorPanel, BorderLayout.NORTH);
+        multipleValuesPanel.add(extractionValueDetails, BorderLayout.CENTER);
+        multipleValuesPanel.add(extractionButtons, BorderLayout.SOUTH);
+        multipleValuesPanel.setVisible(false);
+        xgbc.gridy = 2;
+        xgbc.gridx = 0;
+        xgbc.gridwidth = 2;
+        xgbc.weightx = 1.0;
+        xgbc.weighty = 0.0;
+        xgbc.fill = GridBagConstraints.BOTH;
+        extractionTabPanel.add(multipleValuesPanel, xgbc);
+        xgbc.weighty = 0.0;
+        xgbc.fill = GridBagConstraints.HORIZONTAL;
+
+        // Extraction tab, row 3: Final parent value template
+        xgbc.gridy = 3;
+        xgbc.gridx = 0;
+        xgbc.gridwidth = 1;
+        xgbc.weightx = 0.0;
+        JLabel finalTemplateLabel = new JLabel(text("Final value template:"));
+        finalTemplateLabel.setVisible(false);
+        extractionTabPanel.add(finalTemplateLabel, xgbc);
+        JTextField finalTemplateField = new JTextField(defaultValueTemplate(extractionEditors), 50);
+        finalTemplateField.setToolTipText(text(
+                "Use placeholders such as {{value1}} and {{value2}} to compose the parent variable."));
+        finalTemplateField.setVisible(false);
+        xgbc.gridx = 1;
+        xgbc.weightx = 1.0;
+        extractionTabPanel.add(finalTemplateField, xgbc);
+
+        // Configuration tab, row 2: Match URL/Path
+        gbc.gridy = 2;
         gbc.gridx = 0;
         gbc.weightx = 0.0;
         panel.add(new JLabel(text("Path (literal; query ignored):")), gbc);
 
-        JTextField pathField = new JTextField(path);
+        JTextField pathField = new JTextField(path, 50);
         gbc.gridx = 1;
         gbc.weightx = 1.0;
         panel.add(pathField, gbc);
 
-        // Row 4: Extract From
-        gbc.gridy = 4;
-        gbc.gridx = 0;
-        gbc.weightx = 0.0;
-        panel.add(new JLabel(text("Extract From:")), gbc);
+        // Extraction tab, row 4: Extract From (single-value mode)
+        xgbc.gridy = 4;
+        xgbc.gridx = 0;
+        xgbc.weightx = 0.0;
+        JLabel sourceLabel = new JLabel(text("Extract From:"));
+        extractionTabPanel.add(sourceLabel, xgbc);
 
         JComboBox<String> sourceComboBox = new JComboBox<>(new String[]{
             text("Response Body"), text("Response Headers"), text("Request Body"), text("Request Headers")
@@ -672,30 +741,41 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         } else {
             sourceComboBox.setSelectedIndex(0);
         }
-        gbc.gridx = 1;
-        gbc.weightx = 1.0;
-        panel.add(sourceComboBox, gbc);
+        xgbc.gridx = 1;
+        xgbc.weightx = 1.0;
+        extractionTabPanel.add(sourceComboBox, xgbc);
 
-        // Row 5: Regex Pattern
-        gbc.gridy = 5;
-        gbc.gridx = 0;
-        gbc.weightx = 0.0;
-        panel.add(new JLabel(text("Regex Pattern (1 group):")), gbc);
+        // Extraction tab, row 5: Regex Pattern (single-value mode)
+        xgbc.gridy = 5;
+        xgbc.gridx = 0;
+        xgbc.weightx = 0.0;
+        JLabel regexLabel = new JLabel(text("Regex Pattern (1 group):"));
+        extractionTabPanel.add(regexLabel, xgbc);
 
-        JTextField regexField = new JTextField(proposedRegex);
-        gbc.gridx = 1;
-        gbc.weightx = 1.0;
-        panel.add(regexField, gbc);
+        JTextField regexField = new JTextField(proposedRegex, 50);
+        xgbc.gridx = 1;
+        xgbc.weightx = 1.0;
+        extractionTabPanel.add(regexField, xgbc);
 
-        // Row 6: Save Request checkbox
-        gbc.gridy = 6;
+        xgbc.gridy = 6;
+        xgbc.gridx = 0;
+        xgbc.gridwidth = 2;
+        xgbc.weightx = 1.0;
+        xgbc.weighty = 1.0;
+        xgbc.fill = GridBagConstraints.BOTH;
+        extractionTabPanel.add(Box.createVerticalGlue(), xgbc);
+        xgbc.weighty = 0.0;
+        xgbc.fill = GridBagConstraints.HORIZONTAL;
+
+        // Configuration tab, row 3: Save Request checkbox
+        gbc.gridy = 3;
         gbc.gridx = 0;
         gbc.gridwidth = 2;
         JCheckBox saveRequestCheckBox = new JCheckBox(text("Save this request to refresh token in the future"), true);
         panel.add(saveRequestCheckBox, gbc);
 
-        // Row 7: Initial automation state for the variable
-        gbc.gridy = 7;
+        // Configuration tab, row 4: Initial automation state for the variable
+        gbc.gridy = 4;
         JPanel automationPanel = new JPanel();
         automationPanel.setLayout(new BoxLayout(automationPanel, BoxLayout.Y_AXIS));
         automationPanel.setBorder(BorderFactory.createTitledBorder(text("Variable automation")));
@@ -717,6 +797,72 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         automationPanel.add(secondaryLabel(text(
                 "After a configured status, the saved request obtains a new value and the original request is retried.")));
         panel.add(automationPanel, gbc);
+
+        gbc.gridy = 5;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.weightx = 1.0;
+        gbc.weighty = 1.0;
+        gbc.fill = GridBagConstraints.BOTH;
+        panel.add(Box.createVerticalGlue(), gbc);
+        gbc.weighty = 0.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        boolean[] updatingExtractionSelector = {false};
+        Runnable refreshSelectedExtractionEditor = () -> {
+            if (updatingExtractionSelector[0]) return;
+            showSelectedExtractionValue(
+                    extractionValueDetails, extractionValueSelector,
+                    extractionEditors, removeExtractionValueButton);
+        };
+        extractionValueSelector.addActionListener(e -> refreshSelectedExtractionEditor.run());
+        refreshExtractionValueSelector(
+                extractionValueSelector, extractionValueDetails, extractionEditors,
+                removeExtractionValueButton, updatingExtractionSelector, 0);
+        addExtractionValueButton.addActionListener(e -> {
+            SelectedExtraction additional = selectAdditionalExtraction(dialog, textStr, isRequest);
+            if (additional == null) return;
+            String nextName = nextExtractionValueName(targetPrefix, extractionEditors);
+            extractionEditors.add(new ExtractionValueEditor(nextName, additional));
+            finalTemplateField.setText(defaultValueTemplate(extractionEditors));
+            refreshExtractionValueSelector(
+                    extractionValueSelector, extractionValueDetails, extractionEditors,
+                    removeExtractionValueButton, updatingExtractionSelector,
+                    extractionEditors.size() - 1);
+            fitDialogToContent[0].run();
+        });
+        removeExtractionValueButton.addActionListener(e -> {
+            int selectedIndex = extractionValueSelector.getSelectedIndex();
+            if (selectedIndex < 0 || extractionEditors.size() <= 1) return;
+            extractionEditors.remove(selectedIndex);
+            finalTemplateField.setText(defaultValueTemplate(extractionEditors));
+            refreshExtractionValueSelector(
+                    extractionValueSelector, extractionValueDetails, extractionEditors,
+                    removeExtractionValueButton, updatingExtractionSelector,
+                    Math.min(selectedIndex, extractionEditors.size() - 1));
+            fitDialogToContent[0].run();
+        });
+        multipleValuesCheckBox.addActionListener(e -> {
+            boolean multiple = multipleValuesCheckBox.isSelected();
+            if (multiple) {
+                ExtractionValueEditor first = extractionEditors.get(0);
+                first.sourceComboBox.setSelectedIndex(sourceComboBox.getSelectedIndex());
+                first.regexField.setText(regexField.getText());
+                refreshSelectedExtractionEditor.run();
+            }
+            selectedValueLabel.setVisible(!multiple);
+            valuePreviewScroll.setVisible(!multiple);
+            sourceLabel.setVisible(!multiple);
+            sourceComboBox.setVisible(!multiple);
+            regexLabel.setVisible(!multiple);
+            regexField.setVisible(!multiple);
+            multipleValuesPanel.setVisible(multiple);
+            finalTemplateLabel.setVisible(multiple);
+            finalTemplateField.setVisible(multiple);
+            extractionTabPanel.revalidate();
+            extractionTabPanel.repaint();
+            fitDialogToContent[0].run();
+        });
 
         passiveExtractionCheckBox.addActionListener(e -> {
             if (passiveExtractionCheckBox.isSelected()
@@ -764,11 +910,13 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         saveButton.addActionListener(al -> {
             Object selectedItem = nameComboBox.getEditor().getItem();
             if (selectedItem == null || selectedItem.toString().trim().isEmpty()) {
+                dialogTabs.setSelectedIndex(0);
                 JOptionPane.showMessageDialog(dialog, text("Please select or type a variable name."), text("Error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             String varName = selectedItem.toString().trim();
             if (varName.contains(".")) {
+                dialogTabs.setSelectedIndex(0);
                 JOptionPane.showMessageDialog(dialog, text("Variable names cannot contain '.'. Choose the folder separately."), text("Error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
@@ -777,6 +925,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                     folderNames, folderInput, text("Ungrouped"));
             if (folderName == null) {
                 if (!VariableNames.isValidComponent(folderInput)) {
+                    dialogTabs.setSelectedIndex(0);
                     JOptionPane.showMessageDialog(dialog,
                             text("Folder") + text(" names cannot contain '.'."),
                             text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
@@ -784,20 +933,56 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 }
             }
             String pathFilter = pathField.getText().trim();
-            String chosenSource;
-            switch (sourceComboBox.getSelectedIndex()) {
-                case 1: chosenSource = "headers"; break;
-                case 2: chosenSource = "request_body"; break;
-                case 3: chosenSource = "request_headers"; break;
-                default: chosenSource = "body"; break;
-            }
+            String chosenSource = storedSource(sourceComboBox.getSelectedIndex());
             String regexPattern = regexField.getText().trim();
-            if (!ExtractionEngine.isValidRegex(regexPattern)
-                    || !ExtractionEngine.hasCaptureGroup(regexPattern)) {
-                JOptionPane.showMessageDialog(dialog,
-                        text("The extraction regex must be valid and contain at least one capture group."),
-                        text("Error"), JOptionPane.ERROR_MESSAGE);
-                return;
+            List<VariableExtractionRule.ExtractionTarget> configuredTargets;
+            String configuredTemplate;
+            String configuredValue;
+            if (multipleValuesCheckBox.isSelected()) {
+                configuredTargets = extractionEditors.stream()
+                        .map(ExtractionValueEditor::target).toList();
+                for (VariableExtractionRule.ExtractionTarget target : configuredTargets) {
+                    if (!ExtractionEngine.isValidRegex(target.regex())
+                            || !ExtractionEngine.hasCaptureGroup(target.regex())) {
+                        dialogTabs.setSelectedIndex(1);
+                        JOptionPane.showMessageDialog(dialog,
+                                text("Every extraction value must have a valid regex with at least one capture group."),
+                                text("Error"), JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                }
+                configuredTemplate = finalTemplateField.getText();
+                if (!ExtractionEngine.isValidValueTemplate(configuredTemplate, configuredTargets)) {
+                    dialogTabs.setSelectedIndex(1);
+                    JOptionPane.showMessageDialog(dialog,
+                            text("The final value template must reference every extraction value."),
+                            text("Error"), JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                configuredValue = ExtractionEngine.composeValue(
+                        configuredTargets,
+                        extractionEditors.stream().map(editor -> editor.selectedValue).toList(),
+                        configuredTemplate);
+                if (configuredValue == null) {
+                    dialogTabs.setSelectedIndex(1);
+                    JOptionPane.showMessageDialog(dialog,
+                            text("The final value template is invalid."),
+                            text("Error"), JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            } else {
+                if (!ExtractionEngine.isValidRegex(regexPattern)
+                        || !ExtractionEngine.hasCaptureGroup(regexPattern)) {
+                    dialogTabs.setSelectedIndex(1);
+                    JOptionPane.showMessageDialog(dialog,
+                            text("The extraction regex must be valid and contain at least one capture group."),
+                            text("Error"), JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                configuredTargets = List.of(new VariableExtractionRule.ExtractionTarget(
+                        "value1", VariableExtractionRule.ExtractionSource.fromStored(chosenSource), regexPattern));
+                configuredTemplate = "{{value1}}";
+                configuredValue = selectedText;
             }
 
             if (folderName == null) {
@@ -832,14 +1017,14 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 int choice = JOptionPane.showOptionDialog(
                         dialog,
                         String.format(text(
-                                "The variable \"%s\" already exists in this folder. Updating will replace its current value and automation rule."),
+                                "The variable \"%s\" already exists in this folder. Choose whether to update it or create a new variable."),
                                 varName),
                         text("Variable already exists"),
                         JOptionPane.DEFAULT_OPTION,
-                        JOptionPane.WARNING_MESSAGE,
+                        JOptionPane.QUESTION_MESSAGE,
                         null,
                         options,
-                        options[1]);
+                        options[0]);
                 if (choice == 1) {
                     String alternativeName = requestAlternativeVariableName(
                             dialog, folderName, varName);
@@ -862,21 +1047,39 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
             }
 
             // Save variables & rules
-            variableManager.addOrUpdateExtractionRuleInFolder(
-                    folderName,
-                    varName,
-                    selectedText, 
-                    passiveExtractionCheckBox.isSelected(),
-                    sessionRecoveryCheckBox.isSelected(),
-                    pathFilter, 
-                    chosenSource, 
-                    regexPattern,
-                    requestResponse.request().method(),
-                    reqBase64,
-                    host,
-                    port,
-                    secure
-            );
+            if (multipleValuesCheckBox.isSelected()) {
+                variableManager.addOrUpdateMultipleExtractionRuleInFolder(
+                        folderName,
+                        varName,
+                        configuredValue,
+                        passiveExtractionCheckBox.isSelected(),
+                        sessionRecoveryCheckBox.isSelected(),
+                        pathFilter,
+                        configuredTargets,
+                        configuredTemplate,
+                        requestResponse.request().method(),
+                        reqBase64,
+                        host,
+                        port,
+                        secure
+                );
+            } else {
+                variableManager.addOrUpdateExtractionRuleInFolder(
+                        folderName,
+                        varName,
+                        configuredValue,
+                        passiveExtractionCheckBox.isSelected(),
+                        sessionRecoveryCheckBox.isSelected(),
+                        pathFilter,
+                        chosenSource,
+                        regexPattern,
+                        requestResponse.request().method(),
+                        reqBase64,
+                        host,
+                        port,
+                        secure
+                );
+            }
             dialog.dispose();
         });
 
@@ -885,9 +1088,207 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         buttonPanel.add(saveButton);
         buttonPanel.add(cancelButton);
 
-        dialog.add(panel, BorderLayout.CENTER);
+        dialog.add(dialogTabs, BorderLayout.CENTER);
         dialog.add(buttonPanel, BorderLayout.SOUTH);
+        fitDialogToContent[0] = () -> fitAssignmentDialogToContent(dialog, suiteFrame);
+        dialogTabs.addChangeListener(e -> fitDialogToContent[0].run());
+        fitDialogToContent[0].run();
         dialog.setVisible(true);
+    }
+
+    private void fitAssignmentDialogToContent(JDialog dialog, Frame owner) {
+        dialog.pack();
+        Rectangle screen = owner.getGraphicsConfiguration().getBounds();
+        int width = Math.max(760, Math.min(dialog.getWidth(), 1050));
+        int maximumHeight = Math.max(520, (int) (screen.height * 0.88));
+        int height = dialog.getHeight();
+        Component center = ((BorderLayout) dialog.getContentPane().getLayout())
+                .getLayoutComponent(BorderLayout.CENTER);
+        if (center instanceof JTabbedPane tabs && tabs.getSelectedComponent() != null) {
+            Dimension tabsPreferred = tabs.getPreferredSize();
+            int largestPageHeight = 0;
+            for (int index = 0; index < tabs.getTabCount(); index++) {
+                largestPageHeight = Math.max(
+                        largestPageHeight, tabs.getComponentAt(index).getPreferredSize().height);
+            }
+            int tabChromeHeight = Math.max(0, tabsPreferred.height - largestPageHeight);
+            int nonTabHeight = Math.max(0, dialog.getHeight() - tabsPreferred.height);
+            height = nonTabHeight + tabChromeHeight
+                    + tabs.getSelectedComponent().getPreferredSize().height;
+        }
+        height = Math.min(height, maximumHeight);
+        dialog.setSize(width, height);
+        dialog.setLocationRelativeTo(owner);
+    }
+
+    private SelectedExtraction analyzeSelection(String rawMessage, int start, int end, boolean requestContent) {
+        String selected = rawMessage.substring(start, end);
+        int separator = rawMessage.indexOf("\r\n\r\n");
+        int separatorLength = 4;
+        if (separator < 0) {
+            separator = rawMessage.indexOf("\n\n");
+            separatorLength = 2;
+        }
+
+        String source = requestContent ? "request_body" : "body";
+        String contextText = rawMessage;
+        int contextStart = start;
+        int contextEnd = end;
+        if (separator >= 0) {
+            if (start < separator) {
+                source = requestContent ? "request_headers" : "headers";
+                contextText = rawMessage.substring(0, separator);
+            } else {
+                contextText = rawMessage.substring(separator + separatorLength);
+                contextStart = Math.max(0, start - separator - separatorLength);
+                contextEnd = Math.max(0, end - separator - separatorLength);
+            }
+        }
+        return new SelectedExtraction(
+                selected, source, generateProposedRegex(contextText, contextStart, contextEnd));
+    }
+
+    private SelectedExtraction selectAdditionalExtraction(
+            Component parent, String rawMessage, boolean requestContent) {
+        SelectedExtraction[] result = {null};
+        Window owner = SwingUtilities.getWindowAncestor(parent);
+        JDialog selector = new JDialog(owner, text("Select another value to extract"),
+                Dialog.ModalityType.APPLICATION_MODAL);
+        selector.setLayout(new BorderLayout(8, 8));
+        selector.setSize(820, 620);
+        selector.setLocationRelativeTo(parent);
+
+        JLabel instructions = new JLabel(text(
+                "Select one value in the message below, then click Use selected value."));
+        instructions.setBorder(new EmptyBorder(8, 8, 0, 8));
+        selector.add(instructions, BorderLayout.NORTH);
+
+        JTextArea messageArea = new JTextArea(rawMessage);
+        messageArea.setEditable(false);
+        messageArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
+        messageArea.setCaretPosition(0);
+        selector.add(new JScrollPane(messageArea), BorderLayout.CENTER);
+
+        JButton useSelection = new JButton(text("Use selected value"));
+        useSelection.addActionListener(e -> {
+            int selectionStart = messageArea.getSelectionStart();
+            int selectionEnd = messageArea.getSelectionEnd();
+            if (selectionStart >= selectionEnd) {
+                JOptionPane.showMessageDialog(selector,
+                        text("Select a value in the message first."),
+                        text("Error"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            result[0] = analyzeSelection(rawMessage, selectionStart, selectionEnd, requestContent);
+            selector.dispose();
+        });
+        JButton cancel = new JButton(text("Cancel"));
+        cancel.addActionListener(e -> selector.dispose());
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 6));
+        buttons.add(useSelection);
+        buttons.add(cancel);
+        selector.add(buttons, BorderLayout.SOUTH);
+        selector.setVisible(true);
+        return result[0];
+    }
+
+    private void refreshExtractionValueSelector(
+            JComboBox<String> selector, JPanel details,
+            List<ExtractionValueEditor> editors, JButton removeButton,
+            boolean[] updatingSelector, int selectedIndex) {
+        updatingSelector[0] = true;
+        try {
+            selector.removeAllItems();
+            for (ExtractionValueEditor editor : editors) selector.addItem(editor.name);
+            if (!editors.isEmpty()) {
+                selector.setSelectedIndex(Math.max(0, Math.min(selectedIndex, editors.size() - 1)));
+            }
+        } finally {
+            updatingSelector[0] = false;
+        }
+        showSelectedExtractionValue(details, selector, editors, removeButton);
+    }
+
+    private void showSelectedExtractionValue(
+            JPanel details, JComboBox<String> selector,
+            List<ExtractionValueEditor> editors, JButton removeButton) {
+        details.removeAll();
+        int selectedIndex = selector.getSelectedIndex();
+        if (selectedIndex < 0 || selectedIndex >= editors.size()) {
+            removeButton.setEnabled(false);
+            details.revalidate();
+            details.repaint();
+            return;
+        }
+        ExtractionValueEditor editor = editors.get(selectedIndex);
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.insets = new Insets(3, 5, 3, 5);
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.gridy = 0;
+        constraints.gridx = 0;
+        constraints.weightx = 0.0;
+        details.add(new JLabel(text("Selected Value:")), constraints);
+        JTextField selectedField = new JTextField(editor.selectedValue, 50);
+        selectedField.setEditable(false);
+        constraints.gridx = 1;
+        constraints.weightx = 1.0;
+        details.add(selectedField, constraints);
+
+        constraints.gridy = 1;
+        constraints.gridx = 0;
+        constraints.weightx = 0.0;
+        details.add(new JLabel(text("Extract From:")), constraints);
+        constraints.gridx = 1;
+        constraints.weightx = 1.0;
+        details.add(editor.sourceComboBox, constraints);
+
+        constraints.gridy = 2;
+        constraints.gridx = 0;
+        constraints.weightx = 0.0;
+        details.add(new JLabel(text("Regex Pattern (1 group):")), constraints);
+        constraints.gridx = 1;
+        constraints.weightx = 1.0;
+        details.add(editor.regexField, constraints);
+
+        removeButton.setEnabled(editors.size() > 1);
+        details.revalidate();
+        details.repaint();
+    }
+
+    private String nextExtractionValueName(
+            String prefix, List<ExtractionValueEditor> editors) {
+        int suffix = 1;
+        Set<String> usedNames = editors.stream()
+                .map(editor -> editor.name).collect(java.util.stream.Collectors.toSet());
+        while (usedNames.contains(prefix + suffix)) suffix++;
+        return prefix + suffix;
+    }
+
+    private String defaultValueTemplate(List<ExtractionValueEditor> editors) {
+        return editors.stream().map(editor -> "{{" + editor.name + "}}")
+                .collect(java.util.stream.Collectors.joining("; "));
+    }
+
+    private int sourceIndex(String source) {
+        return switch (source == null ? "" : source) {
+            case "headers" -> 1;
+            case "request_body" -> 2;
+            case "request_headers" -> 3;
+            default -> 0;
+        };
+    }
+
+    private String storedSource(int sourceIndex) {
+        return switch (sourceIndex) {
+            case 1 -> "headers";
+            case 2 -> "request_body";
+            case 3 -> "request_headers";
+            default -> "body";
+        };
+    }
+
+    private VariableExtractionRule.ExtractionSource extractionSource(int sourceIndex) {
+        return VariableExtractionRule.ExtractionSource.fromStored(storedSource(sourceIndex));
     }
 
     private String requestAlternativeVariableName(Component parent, String folderName, String originalName) {

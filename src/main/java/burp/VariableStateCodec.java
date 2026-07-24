@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 final class VariableStateCodec {
-    static final String VERSION = "3";
+    static final String VERSION = "5";
 
     record State(List<VariableFolder> folders, List<VariableDefinition> variables) {}
 
@@ -34,7 +34,8 @@ final class VariableStateCodec {
     static State decode(String data) {
         if (data == null || data.isEmpty()) return new State(new ArrayList<>(), new ArrayList<>());
         String[] lines = data.split("\\n", -1);
-        if (lines.length == 0 || !(VERSION.equals(lines[0]) || "2".equals(lines[0]))) {
+        if (lines.length == 0 || !(VERSION.equals(lines[0]) || "4".equals(lines[0])
+                || "3".equals(lines[0]) || "2".equals(lines[0]))) {
             throw new IllegalArgumentException("Unsupported variable state version");
         }
         List<VariableFolder> folders = new ArrayList<>();

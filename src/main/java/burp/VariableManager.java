@@ -97,8 +97,11 @@ public final class VariableManager {
     private JComboBox<String> queryModeComboBox;
     private JComboBox<String> discriminatorSourceComboBox;
     private JTextField discriminatorRegexField;
+    private JComboBox<String> extractionZoneComboBox;
     private JComboBox<String> sourceComboBox;
     private JTextField regexField;
+    private JTextField delimiterField;
+    private JButton removeExtractionZoneButton;
     private JButton updateRuleButton;
     private JToggleButton advancedMatchToggle;
     private JPanel advancedMatchPanel;
@@ -231,6 +234,89 @@ public final class VariableManager {
         addOrUpdateExtractionRule(qualified, value, ruleEnabled, automaticRefreshEnabled,
                 matchUrl, source, regex,
                 matchMethod, reqBase64, host, port, secure);
+    }
+
+    public void addOrUpdateMultipleExtractionRuleInFolder(
+            String folderName, String localName, String value,
+            boolean ruleEnabled, boolean automaticRefreshEnabled,
+            String matchUrl, List<VariableExtractionRule.ExtractionTarget> targets,
+            String valueTemplate, String matchMethod, String reqBase64,
+            String host, int port, boolean secure) {
+        if (targets == null || targets.isEmpty()) {
+            throw new IllegalArgumentException("At least one extraction value is required");
+        }
+        VariableExtractionRule.ExtractionTarget primary = targets.get(0);
+        addOrUpdateExtractionRuleInFolder(
+                folderName, localName, value, ruleEnabled, automaticRefreshEnabled,
+                matchUrl, primary.source().storedValue(), primary.regex(),
+                matchMethod, reqBase64, host, port, secure);
+
+        String qualified = qualifyVariableName(folderName, localName);
+        synchronized (lock) {
+            VariableExtractionRule rule = rules.get(qualified).copy();
+            rule.setTargets(targets);
+            rule.setValueTemplate(valueTemplate);
+            rules.put(qualified, rule);
+            VariableDefinition definition = findDefinitionByKey(qualified);
+            if (definition != null) definition.setRule(rule);
+            savePreferences();
+        }
+        SwingUtilities.invokeLater(() -> {
+            tableModel.fireTableDataChanged();
+            int row = tableModel.findVariableRow(qualified);
+            if (row >= 0) variablesTable.setRowSelectionInterval(row, row);
+        });
+    }
+
+    public void appendExtractionZoneInFolder(String folderName, String localName, String newPartValue,
+                                            boolean ruleEnabled, boolean automaticRefreshEnabled,
+                                            String matchUrl, String source,
+                                            String regex, String matchMethod, String reqBase64,
+                                            String host, int port, boolean secure) {
+        String qualified = qualifyVariableName(folderName, localName);
+        synchronized (lock) {
+            VariableExtractionRule existingRule = rules.get(qualified);
+            String existingVal = values.getOrDefault(qualified, "");
+            if (existingRule == null || !hasValidExtractionTargets(existingRule)) {
+                addOrUpdateExtractionRuleInFolder(folderName, localName, newPartValue,
+                        ruleEnabled, automaticRefreshEnabled, matchUrl, source, regex,
+                        matchMethod, reqBase64, host, port, secure);
+                return;
+            }
+            String delimiter = existingRule.getJoinDelimiter();
+            String combinedVal = existingVal.isEmpty() ? newPartValue : existingVal + delimiter + newPartValue;
+            values.put(qualified, combinedVal);
+
+            existingRule.setEnabled(ruleEnabled);
+            existingRule.setAutomaticRefreshEnabled(automaticRefreshEnabled);
+            String previousTemplate = existingRule.getValueTemplate();
+            existingRule.addTarget(VariableExtractionRule.ExtractionSource.fromStored(source), regex);
+            VariableExtractionRule.ExtractionTarget addedTarget =
+                    existingRule.getTargets().get(existingRule.getTargets().size() - 1);
+            existingRule.setValueTemplate(previousTemplate + delimiter
+                    + "{{" + addedTarget.name() + "}}");
+
+            if (reqBase64 != null && !reqBase64.isEmpty()) {
+                existingRule.setSavedRequestBase64(reqBase64);
+                existingRule.setSavedHost(host);
+                existingRule.setSavedPort(port);
+                existingRule.setSavedSecure(secure);
+            }
+
+            VariableDefinition definition = findDefinitionByKey(qualified);
+            if (definition != null) {
+                definition.setValue(combinedVal);
+                definition.setRule(existingRule);
+            }
+            savePreferences();
+        }
+        SwingUtilities.invokeLater(() -> {
+            tableModel.fireTableDataChanged();
+            int row = tableModel.findVariableRow(qualified);
+            if (row >= 0) {
+                variablesTable.setRowSelectionInterval(row, row);
+            }
+        });
     }
 
     public boolean isReplacementMasterEnabled() {
@@ -702,6 +788,16 @@ public final class VariableManager {
         egbc.gridy = 0;
         egbc.gridx = 0;
         egbc.weightx = 0.0;
+        extractionPanel.add(new JLabel(text("Extraction zone:")), egbc);
+        extractionZoneComboBox = new JComboBox<>();
+        extractionZoneComboBox.addActionListener(e -> loadSelectedExtractionZone());
+        egbc.gridx = 1;
+        egbc.weightx = 1.0;
+        extractionPanel.add(extractionZoneComboBox, egbc);
+
+        egbc.gridy = 1;
+        egbc.gridx = 0;
+        egbc.weightx = 0.0;
         extractionPanel.add(new JLabel(text("Extract From:")), egbc);
         sourceComboBox = new JComboBox<>(new String[]{
             text("Response Body"), text("Response Headers"), text("Request Body"), text("Request Headers")
@@ -711,7 +807,7 @@ public final class VariableManager {
         egbc.weightx = 1.0;
         extractionPanel.add(sourceComboBox, egbc);
 
-        egbc.gridy = 1;
+        egbc.gridy = 2;
         egbc.gridx = 0;
         egbc.weightx = 0.0;
         extractionPanel.add(new JLabel(text("Regex (with 1 capture group):")), egbc);
@@ -721,12 +817,27 @@ public final class VariableManager {
         egbc.weightx = 1.0;
         extractionPanel.add(regexField, egbc);
 
-        egbc.gridy = 2;
+        egbc.gridy = 3;
         egbc.gridx = 0;
-        egbc.gridwidth = 2;
+        egbc.weightx = 0.0;
+        egbc.gridwidth = 1;
+        extractionPanel.add(new JLabel(text("Final value template:")), egbc);
+        delimiterField = new JTextField("{{value1}}");
+        delimiterField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        egbc.gridx = 1;
+        egbc.weightx = 1.0;
+        extractionPanel.add(delimiterField, egbc);
+
+        egbc.gridy = 4;
+        egbc.gridx = 0;
+        egbc.gridwidth = 1;
         updateRuleButton = new JButton(text("Update Rule from Response..."));
         updateRuleButton.addActionListener(e -> triggerUpdateRuleFromResponse());
         extractionPanel.add(updateRuleButton, egbc);
+        egbc.gridx = 1;
+        removeExtractionZoneButton = new JButton(text("Remove Zone"));
+        removeExtractionZoneButton.addActionListener(e -> removeSelectedExtractionZone());
+        extractionPanel.add(removeExtractionZoneButton, egbc);
         rulePanel.add(extractionPanel);
 
         advancedMatchToggle = new JToggleButton(text("Show advanced automation options"));
@@ -1225,10 +1336,15 @@ public final class VariableManager {
             setMatchFieldsEnabled(false);
             matchUrlField.setText("");
             matchUrlField.setEnabled(false);
+            extractionZoneComboBox.removeAllItems();
+            extractionZoneComboBox.setEnabled(false);
             sourceComboBox.setSelectedIndex(0);
             sourceComboBox.setEnabled(false);
             regexField.setText("");
             regexField.setEnabled(false);
+            delimiterField.setText("{{value1}}");
+            delimiterField.setEnabled(false);
+            removeExtractionZoneButton.setEnabled(false);
             updateRuleButton.setEnabled(false);
             savedRequestLabel.setText(text("Saved Request: None"));
             refreshRequestButton.setEnabled(false);
@@ -1286,19 +1402,16 @@ public final class VariableManager {
         });
         discriminatorRegexField.setText(rule.getDiscriminatorRegex());
 
-        sourceComboBox.setEnabled(true);
-        if ("request_body".equals(rule.getSource())) {
-            sourceComboBox.setSelectedIndex(2);
-        } else if ("request_headers".equals(rule.getSource())) {
-            sourceComboBox.setSelectedIndex(3);
-        } else if ("headers".equalsIgnoreCase(rule.getSource())) {
-            sourceComboBox.setSelectedIndex(1);
-        } else {
-            sourceComboBox.setSelectedIndex(0);
+        extractionZoneComboBox.removeAllItems();
+        for (int index = 0; index < rule.getTargets().size(); index++) {
+            extractionZoneComboBox.addItem(rule.getTargets().get(index).name());
         }
-
-        regexField.setEnabled(true);
-        regexField.setText(rule.getRegex());
+        extractionZoneComboBox.setEnabled(true);
+        extractionZoneComboBox.setSelectedIndex(0);
+        displayExtractionTarget(rule.getTargets().get(0));
+        removeExtractionZoneButton.setEnabled(rule.getTargets().size() > 1);
+        delimiterField.setEnabled(true);
+        delimiterField.setText(rule.getValueTemplate());
 
         // Update refresh request details
         if (rule.getSavedRequestBase64() == null || rule.getSavedRequestBase64().isEmpty()) {
@@ -1354,8 +1467,12 @@ public final class VariableManager {
         matchUrlField.setText("");
         queryField.setText("");
         discriminatorRegexField.setText("");
+        extractionZoneComboBox.removeAllItems();
+        extractionZoneComboBox.setEnabled(false);
         sourceComboBox.setSelectedIndex(0);
         regexField.setText("");
+        delimiterField.setText("{{value1}}");
+        removeExtractionZoneButton.setEnabled(false);
         updateRuleButton.setEnabled(false);
         savedRequestLabel.setText(text("Saved Request: None"));
         refreshRequestButton.setEnabled(false);
@@ -1378,6 +1495,7 @@ public final class VariableManager {
                 default: source = "body"; break;
             }
             String regex = regexField.getText().trim();
+            String valueTemplate = delimiterField.getText();
 
             synchronized (lock) {
                 VariableExtractionRule existingRule = rules.get(name);
@@ -1386,8 +1504,12 @@ public final class VariableManager {
                 rule.setEnabled(ruleEnabled);
                 rule.setAutomaticRefreshEnabled(automaticRefreshCheckBox.isSelected());
                 rule.setAllowNonIdempotentReplay(allowNonIdempotentReplayCheckBox.isSelected());
-                rule.setSource(source);
-                rule.setRegex(regex);
+                int targetIndex = Math.max(0, extractionZoneComboBox.getSelectedIndex());
+                if (targetIndex < rule.getTargets().size()) {
+                    rule.replaceTarget(targetIndex,
+                            VariableExtractionRule.ExtractionSource.fromStored(source), regex);
+                }
+                rule.setValueTemplate(valueTemplate);
                 if (rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT) {
                     int port = parsePort(matchPortField.getText());
                     rule.configureExplicitMatch(
@@ -1416,6 +1538,58 @@ public final class VariableManager {
             // Update Table display
             tableModel.fireTableCellUpdated(selectedRow, 2);
         }
+    }
+
+    private void loadSelectedExtractionZone() {
+        if (isUpdatingUI) return;
+        int selectedRow = variablesTable.getSelectedRow();
+        String name = tableModel.variableKeyAt(selectedRow);
+        VariableExtractionRule rule = name == null ? null : rules.get(name);
+        int targetIndex = extractionZoneComboBox.getSelectedIndex();
+        if (rule == null || targetIndex < 0 || targetIndex >= rule.getTargets().size()) return;
+
+        isUpdatingUI = true;
+        displayExtractionTarget(rule.getTargets().get(targetIndex));
+        removeExtractionZoneButton.setEnabled(rule.getTargets().size() > 1);
+        isUpdatingUI = false;
+    }
+
+    private void displayExtractionTarget(VariableExtractionRule.ExtractionTarget target) {
+        sourceComboBox.setEnabled(true);
+        sourceComboBox.setSelectedIndex(switch (target.source()) {
+            case RESPONSE_HEADERS -> 1;
+            case REQUEST_BODY -> 2;
+            case REQUEST_HEADERS -> 3;
+            case RESPONSE_BODY -> 0;
+        });
+        regexField.setEnabled(true);
+        regexField.setText(target.regex());
+    }
+
+    private void removeSelectedExtractionZone() {
+        int selectedRow = variablesTable.getSelectedRow();
+        String name = tableModel.variableKeyAt(selectedRow);
+        int targetIndex = extractionZoneComboBox.getSelectedIndex();
+        if (name == null || targetIndex < 0) return;
+        int confirmation = JOptionPane.showConfirmDialog(
+                mainPanel, text("Remove the selected extraction zone?"),
+                text("Remove Zone"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (confirmation != JOptionPane.YES_OPTION) return;
+
+        synchronized (lock) {
+            VariableExtractionRule existingRule = rules.get(name);
+            if (existingRule == null || existingRule.getTargets().size() <= 1) return;
+            VariableExtractionRule rule = existingRule.copy();
+            rule.removeTarget(targetIndex);
+            rule.resetValueTemplate();
+            rules.put(name, rule);
+            VariableDefinition definition = findDefinitionByKey(name);
+            if (definition != null) definition.setRule(rule);
+            savePreferences();
+        }
+        updateDetailsPanel(selectedRow);
+        int remainingIndex = Math.min(targetIndex, extractionZoneComboBox.getItemCount() - 1);
+        if (remainingIndex >= 0) extractionZoneComboBox.setSelectedIndex(remainingIndex);
     }
 
     private void handleRuleActivation(JCheckBox checkBox, boolean refresh) {
@@ -1464,19 +1638,25 @@ public final class VariableManager {
                 || !ExtractionEngine.hasCaptureGroup(extractionRegex)) {
             return "The extraction regex must be valid and contain at least one capture group.";
         }
+        int selectedRow = variablesTable.getSelectedRow();
+        String selectedName = tableModel.variableKeyAt(selectedRow);
+        VariableExtractionRule selectedRule = selectedName == null ? null : rules.get(selectedName);
+        if (selectedRule != null && !hasValidExtractionTargets(selectedRule)) {
+            return "Every extraction zone must have a valid regex with at least one capture group.";
+        }
+        if (selectedRule != null && !ExtractionEngine.isValidValueTemplate(
+                delimiterField.getText(), selectedRule.getTargets())) {
+            return "The final value template must reference every extraction value.";
+        }
         if (refresh) {
-            int row = variablesTable.getSelectedRow();
-            String name = tableModel.variableKeyAt(row);
-            VariableExtractionRule rule = name == null ? null : rules.get(name);
+            VariableExtractionRule rule = selectedRule;
             if (rule == null || rule.getSavedRequestBase64() == null
                     || rule.getSavedRequestBase64().isEmpty()) {
                 return "Automatic refresh requires a saved request.";
             }
             return null;
         }
-        int row = variablesTable.getSelectedRow();
-        String name = tableModel.variableKeyAt(row);
-        VariableExtractionRule current = name == null ? null : rules.get(name);
+        VariableExtractionRule current = selectedRule;
         if (current != null
                 && current.getMatchStrategy() != VariableExtractionRule.MatchStrategy.EXPLICIT) {
             return null;
@@ -1712,6 +1892,9 @@ public final class VariableManager {
         if (name == null) return;
         VariableExtractionRule rule = rules.get(name);
         if (rule == null || rule.getSavedRequestBase64() == null || rule.getSavedRequestBase64().isEmpty()) return;
+        int targetIndex = Math.max(0, extractionZoneComboBox.getSelectedIndex());
+        if (targetIndex >= rule.getTargets().size()) return;
+        VariableExtractionRule.ExtractionTarget selectedTarget = rule.getTargets().get(targetIndex);
 
         updateRuleButton.setEnabled(false);
         updateRuleButton.setText(text("Fetching Response..."));
@@ -1776,7 +1959,8 @@ public final class VariableManager {
                 }
 
                 String textStr;
-                if (rule.getSource() != null && rule.getSource().startsWith("request_")) {
+                if (selectedTarget.source() == VariableExtractionRule.ExtractionSource.REQUEST_BODY
+                        || selectedTarget.source() == VariableExtractionRule.ExtractionSource.REQUEST_HEADERS) {
                     textStr = new String(reqResp.request().toByteArray().getBytes(), StandardCharsets.UTF_8);
                 } else {
                     textStr = new String(reqResp.response().toByteArray().getBytes(), StandardCharsets.UTF_8);
@@ -1784,7 +1968,7 @@ public final class VariableManager {
 
                 // Open selection dialog on EDT
                 SwingUtilities.invokeLater(() -> {
-                    showResponseSelectorDialog(name, rule, textStr, selectedRow);
+                    showResponseSelectorDialog(name, rule, targetIndex, textStr, selectedRow);
                 });
 
             } catch (Exception ex) {
@@ -1801,7 +1985,8 @@ public final class VariableManager {
         }).start();
     }
 
-    private void showResponseSelectorDialog(String varName, VariableExtractionRule rule, String responseStr, int rowIndex) {
+    private void showResponseSelectorDialog(String varName, VariableExtractionRule rule, int targetIndex,
+                                            String responseStr, int rowIndex) {
         JDialog selectorDialog = new JDialog(api.userInterface().swingUtils().suiteFrame(), text("Highlight New Token - ") + varName, Dialog.ModalityType.APPLICATION_MODAL);
         selectorDialog.setLayout(new BorderLayout(10, 10));
         selectorDialog.setSize(700, 550);
@@ -1812,7 +1997,9 @@ public final class VariableManager {
         instrLabel.setBorder(new EmptyBorder(5, 5, 5, 5));
         selectorDialog.add(instrLabel, BorderLayout.NORTH);
 
-        boolean requestContent = rule.getSource() != null && rule.getSource().startsWith("request_");
+        VariableExtractionRule.ExtractionTarget selectedTarget = rule.getTargets().get(targetIndex);
+        boolean requestContent = selectedTarget.source() == VariableExtractionRule.ExtractionSource.REQUEST_BODY
+                || selectedTarget.source() == VariableExtractionRule.ExtractionSource.REQUEST_HEADERS;
 
         // Use Burp's native message editor so users can switch between Pretty and Raw.
         // The same dialog also supports request-based extraction rules.
@@ -1860,9 +2047,12 @@ public final class VariableManager {
         JComboBox<String> extractSrcCombo = new JComboBox<>(new String[]{
             text("Response Body"), text("Response Headers"), text("Request Body"), text("Request Headers")
         });
-        if ("request_headers".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(3);
-        else if ("request_body".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(2);
-        else if ("headers".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(1);
+        extractSrcCombo.setSelectedIndex(switch (selectedTarget.source()) {
+            case RESPONSE_HEADERS -> 1;
+            case REQUEST_BODY -> 2;
+            case REQUEST_HEADERS -> 3;
+            case RESPONSE_BODY -> 0;
+        });
         sgbc.gridx = 1; sgbc.weightx = 1.0;
         southPanel.add(extractSrcCombo, sgbc);
 
@@ -1959,8 +2149,8 @@ public final class VariableManager {
             }
 
             synchronized (lock) {
-                rule.setRegex(finalRegex);
-                rule.setSource(chosenSource);
+                rule.replaceTarget(targetIndex,
+                        VariableExtractionRule.ExtractionSource.fromStored(chosenSource), finalRegex);
                 savePreferences();
             }
             selectorDialog.dispose();
@@ -2161,46 +2351,22 @@ public final class VariableManager {
         // Send request programmatically via Burp HTTP engine
         HttpRequestResponse reqResp = api.http().sendRequest(savedReq);
 
-        if (reqResp.response() != null) {
-            String sourceContent = "";
-            String source = rule.getSource() != null ? rule.getSource().toLowerCase() : "body";
-            
-            if ("request_headers".equals(source)) {
-                StringBuilder sb = new StringBuilder();
-                for (HttpHeader header : reqResp.request().headers()) {
-                    sb.append(header.name()).append(": ").append(header.value()).append("\r\n");
-                }
-                sourceContent = sb.toString();
-            } else if ("request_body".equals(source)) {
-                sourceContent = reqResp.request().bodyToString();
-            } else if ("headers".equals(source)) {
-                StringBuilder sb = new StringBuilder();
-                for (HttpHeader header : reqResp.response().headers()) {
-                    sb.append(header.name()).append(": ").append(header.value()).append("\r\n");
-                }
-                sourceContent = sb.toString();
-            } else {
-                sourceContent = reqResp.response().bodyToString();
-            }
+        if (reqResp.response() == null) throw new Exception("No response received from target.");
 
-            if (sourceContent != null && !sourceContent.isEmpty()) {
-                java.util.regex.Pattern regexPattern = java.util.regex.Pattern.compile(rule.getRegex(), java.util.regex.Pattern.DOTALL);
-                java.util.regex.Matcher matcher = regexPattern.matcher(sourceContent);
-                if (matcher.find() && matcher.groupCount() >= 1) {
-                    String extractedValue = matcher.group(1);
-                    if (extractedValue != null) {
-                        return extractedValue;
-                    }
-                } else {
-                    throw new Exception("Regex pattern did not match response.");
-                }
-            } else {
-                throw new Exception("Server response was empty.");
-            }
-        } else {
-            throw new Exception("No response received from target.");
-        }
-        throw new Exception("Regex capture group did not produce a value.");
+        ExtractionEngine.RequestSnapshot requestSnapshot = new ExtractionEngine.RequestSnapshot(
+                reqResp.request().method(), rule.getSavedHost(), rule.getSavedPort(), rule.isSavedSecure(),
+                reqResp.request().path(),
+                reqResp.request().headers().stream()
+                        .map(header -> header.name() + ": " + header.value()).toList(),
+                reqResp.request().bodyToString());
+        ExtractionEngine.ResponseSnapshot responseSnapshot = new ExtractionEngine.ResponseSnapshot(
+                reqResp.response().headers().stream()
+                        .map(header -> header.name() + ": " + header.value()).toList(),
+                reqResp.response().bodyToString());
+        ExtractionEngine.Evaluation evaluation = ExtractionEngine.extract(
+                rule, requestSnapshot, responseSnapshot);
+        if (evaluation.outcome() == ExtractionOutcome.UPDATED) return evaluation.value();
+        throw new Exception("Extraction failed: " + evaluation.outcome());
     }
 
     private String replacePlaceholders(String text, Map<String, String> variables) {
@@ -2405,8 +2571,7 @@ public final class VariableManager {
     private void validateLoadedRules() {
         for (Map.Entry<String, VariableExtractionRule> entry : rules.entrySet()) {
             VariableExtractionRule rule = entry.getValue();
-            boolean valid = ExtractionEngine.isValidRegex(rule.getRegex())
-                    && ExtractionEngine.hasCaptureGroup(rule.getRegex());
+            boolean valid = hasValidExtractionTargets(rule);
             if (valid && rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT) {
                 valid = !rule.getMatchMethod().isEmpty()
                         && !rule.getMatchHost().isEmpty()
@@ -2435,6 +2600,19 @@ public final class VariableManager {
                         + entry.getKey() + "'.");
             }
         }
+    }
+
+    private boolean hasValidExtractionTargets(VariableExtractionRule rule) {
+        if (rule == null || rule.getTargets().isEmpty()) return false;
+        for (VariableExtractionRule.ExtractionTarget target : rule.getTargets()) {
+            if (target.name().isBlank()
+                    || !ExtractionEngine.isValidRegex(target.regex())
+                    || !ExtractionEngine.hasCaptureGroup(target.regex())) {
+                return false;
+            }
+        }
+        return ExtractionEngine.isValidValueTemplate(
+                rule.getValueTemplate(), rule.getTargets());
     }
 
     private void disableDetails(String message) {
