@@ -22,6 +22,7 @@ import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.datatransfer.DataFlavor;
@@ -35,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public final class VariableManager {
     record VariableListSnapshot(long revision, List<String> names, List<String> folders) {}
@@ -477,7 +479,7 @@ public final class VariableManager {
         JPanel leftPanel = new JPanel(new BorderLayout(5, 5));
         tableModel = new VariablesTableModel();
         variablesTable = new JTable(tableModel);
-        variablesTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        variablesTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         variablesTable.setDragEnabled(true);
         variablesTable.setDropMode(DropMode.INSERT_ROWS);
         variablesTable.setTransferHandler(new VariableRowTransferHandler());
@@ -491,7 +493,9 @@ public final class VariableManager {
         variablesTable.getActionMap().put("renameSelectedNode", new AbstractAction() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
-                int row = variablesTable.getSelectedRow();
+                int[] selectedRows = variablesTable.getSelectedRows();
+                if (selectedRows.length != 1) return;
+                int row = selectedRows[0];
                 TableRow selected = tableModel.rowAt(row);
                 if (selected == null || (selected.folderRow && selected.ungrouped)) return;
                 if (selected.variable != null) {
@@ -501,6 +505,16 @@ public final class VariableManager {
                 } else {
                     renameNode(selected);
                 }
+            }
+        });
+        variablesTable.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0), "deleteSelectedNodes");
+        variablesTable.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_BACK_SPACE, 0), "deleteSelectedNodes");
+        variablesTable.getActionMap().put("deleteSelectedNodes", new AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                deleteSelectedNodes();
             }
         });
         variablesTable.addMouseListener(new MouseAdapter() {
@@ -531,15 +545,23 @@ public final class VariableManager {
                 if (variablesTable.isEditing()) {
                     variablesTable.getCellEditor().stopCellEditing();
                 }
-                variablesTable.setRowSelectionInterval(row, row);
-                createVariablesPopup(row).show(variablesTable, e.getX(), e.getY());
+                if (!variablesTable.isRowSelected(row)) {
+                    variablesTable.setRowSelectionInterval(row, row);
+                }
+                createVariablesPopup().show(variablesTable, e.getX(), e.getY());
                 e.consume();
             }
         });
         variablesTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                int selectedRow = variablesTable.getSelectedRow();
-                updateDetailsPanel(selectedRow);
+                int[] selectedRows = variablesTable.getSelectedRows();
+                if (selectedRows.length == 1) {
+                    updateDetailsPanel(selectedRows[0]);
+                } else if (selectedRows.length > 1) {
+                    disableDetails(text(selectedRows.length + " items selected."));
+                } else {
+                    updateDetailsPanel(-1);
+                }
             }
         });
 
@@ -565,9 +587,7 @@ public final class VariableManager {
         addFolderButton.addActionListener(e -> createFolderDialog());
         addButton.addActionListener(e -> createVariableDialog(selectedFolderId()));
 
-        deleteButton.addActionListener(e -> {
-            deleteSelectedNode();
-        });
+        deleteButton.addActionListener(e -> deleteSelectedNodes());
 
         JMenuItem clearAllItem = new JMenuItem(text("Clear All"));
         clearAllItem.addActionListener(e -> {
@@ -2550,26 +2570,51 @@ public final class VariableManager {
         tableModel.fireTableDataChanged();
     }
 
-    private JPopupMenu createVariablesPopup(int row) {
-        TableRow tableRow = tableModel.rowAt(row);
-        VariableDefinition selectedVariable = tableRow == null ? null : tableRow.variable;
+    private JPopupMenu createVariablesPopup() {
+        int[] selectedRows = variablesTable.getSelectedRows();
+        List<TableRow> targetRows = new ArrayList<>();
+        if (selectedRows != null) {
+            for (int r : selectedRows) {
+                TableRow tr = tableModel.rowAt(r);
+                if (tr != null) targetRows.add(tr);
+            }
+        }
+
+        List<VariableDefinition> selectedVariables = targetRows.stream()
+                .filter(r -> r.variable != null)
+                .map(r -> r.variable).toList();
+
+        List<VariableFolder> selectedFolders = targetRows.stream()
+                .filter(r -> r.folder != null && r.folderRow && !r.ungrouped)
+                .map(r -> r.folder).toList();
+
+        boolean canRename = targetRows.size() == 1 && !(targetRows.get(0).folderRow && targetRows.get(0).ungrouped);
+        boolean canCopy = !selectedVariables.isEmpty();
+        boolean canMove = !selectedVariables.isEmpty() || !selectedFolders.isEmpty();
+        boolean canDelete = targetRows.stream().anyMatch(r -> !(r.folderRow && r.ungrouped));
+
         JPopupMenu menu = new JPopupMenu();
         JMenuItem rename = new JMenuItem(text("Rename"));
-        rename.setEnabled(tableRow != null && !(tableRow.folderRow && tableRow.ungrouped));
-        rename.addActionListener(e -> renameNode(tableRow));
+        rename.setEnabled(canRename);
+        if (canRename) {
+            rename.addActionListener(e -> renameNode(targetRows.get(0)));
+        }
+
         JMenuItem copy = new JMenuItem(text("Copy Placeholder"));
-        copy.setEnabled(selectedVariable != null);
-        copy.addActionListener(e -> copyPlaceholder(selectedVariable));
+        copy.setEnabled(canCopy);
+        copy.addActionListener(e -> copyPlaceholders(selectedVariables));
+
         JMenuItem move = new JMenuItem(text("Move to..."));
-        move.setEnabled(selectedVariable != null);
-        move.addActionListener(e -> SwingUtilities.invokeLater(() -> showMoveDialog(selectedVariable)));
+        move.setEnabled(canMove);
+        move.addActionListener(e -> SwingUtilities.invokeLater(() -> showMoveDialogForSelected(selectedVariables, selectedFolders)));
+
         JMenuItem add = new JMenuItem(text("New Variable"));
-        add.addActionListener(e -> createVariableDialog(tableRow == null ? null
-                : tableRow.folder != null ? tableRow.folder.getId()
-                : tableRow.variable != null ? tableRow.variable.getFolderId() : null));
+        add.addActionListener(e -> createVariableDialog(selectedFolderId()));
+
         JMenuItem delete = new JMenuItem(text("Delete"));
-        delete.setEnabled(tableRow != null && !(tableRow.folderRow && tableRow.ungrouped));
-        delete.addActionListener(e -> deleteNode(tableRow));
+        delete.setEnabled(canDelete);
+        delete.addActionListener(e -> deleteSelectedNodes());
+
         menu.add(rename);
         menu.add(copy);
         menu.add(move);
@@ -2579,12 +2624,18 @@ public final class VariableManager {
         return menu;
     }
 
-    private void copyPlaceholder(VariableDefinition definition) {
-        if (definition == null) return;
-        String placeholder = placeholderFor(qualifiedName(definition));
+    private void copyPlaceholders(List<VariableDefinition> definitions) {
+        if (definitions == null || definitions.isEmpty()) return;
+        String textToCopy = definitions.stream()
+                .map(d -> placeholderFor(qualifiedName(d)))
+                .collect(Collectors.joining("\n"));
         try {
-            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(placeholder), null);
-            showTemporaryStatus(text("Copied ") + placeholder + text(" to the clipboard."));
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(textToCopy), null);
+            if (definitions.size() == 1) {
+                showTemporaryStatus(text("Copied ") + textToCopy + text(" to the clipboard."));
+            } else {
+                showTemporaryStatus(text("Copied ") + definitions.size() + text(" placeholders to the clipboard."));
+            }
         } catch (IllegalStateException | HeadlessException clipboardError) {
             api.logging().logToError("Failed to copy placeholder: " + clipboardError.getMessage());
             JOptionPane.showMessageDialog(mainPanel,
@@ -2655,27 +2706,6 @@ public final class VariableManager {
         tableModel.fireTableDataChanged();
     }
 
-    private void showMoveDialog(VariableDefinition definition) {
-        List<String> choices = new ArrayList<>();
-        String currentFolderId = definition.getFolderId();
-        if (currentFolderId != null) choices.add(text("Ungrouped"));
-        folders.stream()
-                .filter(folder -> !Objects.equals(folder.getId(), currentFolderId))
-                .sorted(Comparator.comparingInt(VariableFolder::getPosition))
-                .forEach(folder -> choices.add(folder.getName()));
-        if (choices.isEmpty()) {
-            JOptionPane.showMessageDialog(mainPanel,
-                    text("Create another folder before moving this variable."),
-                    text("Move Variable"), JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-        Object selected = JOptionPane.showInputDialog(mainPanel, text("Move variable to:"), text("Move Variable"),
-                JOptionPane.PLAIN_MESSAGE, null, choices.toArray(), choices.get(0));
-        if (selected == null) return;
-        VariableFolder target = text("Ungrouped").equals(selected) ? null : findFolderByName(selected.toString());
-        moveDefinition(definition, target == null ? null : target.getId(), countVariablesInFolder(target == null ? null : target.getId()), true);
-    }
-
     private boolean moveDefinition(VariableDefinition definition, String targetFolderId, int targetPosition, boolean confirm) {
         String oldKey = qualifiedName(definition);
         VariableFolder target = findFolder(targetFolderId);
@@ -2705,50 +2735,126 @@ public final class VariableManager {
         return true;
     }
 
-    private void normalizePositions(String folderId) {
-        List<VariableDefinition> group = definitions.stream().filter(v -> Objects.equals(folderId, v.getFolderId()))
-                .sorted(Comparator.comparingInt(VariableDefinition::getPosition)).toList();
-        for (int i = 0; i < group.size(); i++) group.get(i).setPosition(i);
+    private void showMoveDialogForSelected(List<VariableDefinition> selectedVariables, List<VariableFolder> selectedFolders) {
+        List<String> choices = new ArrayList<>();
+        choices.add(text("Ungrouped"));
+        folders.stream()
+                .filter(folder -> !selectedFolders.contains(folder))
+                .sorted(Comparator.comparingInt(VariableFolder::getPosition))
+                .forEach(folder -> choices.add(folder.getName()));
+
+        if (choices.isEmpty()) {
+            JOptionPane.showMessageDialog(mainPanel,
+                    text("Create another folder before moving items."),
+                    text("Move Items"), JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        Object selected = JOptionPane.showInputDialog(mainPanel, text("Move selected items to:"), text("Move Items"),
+                JOptionPane.PLAIN_MESSAGE, null, choices.toArray(), choices.get(0));
+        if (selected == null) return;
+        VariableFolder targetFolder = text("Ungrouped").equals(selected) ? null : findFolderByName(selected.toString());
+        String targetFolderId = targetFolder == null ? null : targetFolder.getId();
+
+        boolean anyKeyChanges = false;
+        for (VariableDefinition def : selectedVariables) {
+            String oldKey = qualifiedName(def);
+            String newKey = targetFolder == null ? def.getName() : targetFolder.getName() + "." + def.getName();
+            if (!oldKey.equals(newKey)) {
+                if (values.containsKey(newKey) && findDefinitionByKey(newKey) != def && !selectedVariables.contains(findDefinitionByKey(newKey))) {
+                    JOptionPane.showMessageDialog(mainPanel, text("Variable '") + newKey + text("' already exists."), text("Move Items"), JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                anyKeyChanges = true;
+            }
+        }
+
+        if (anyKeyChanges) {
+            if (JOptionPane.showConfirmDialog(mainPanel,
+                    text("Moving selected variables will change placeholder names.\nDo you want to proceed?"),
+                    text("Move Items"), JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) {
+                return;
+            }
+        }
+
+        int targetPos = countVariablesInFolder(targetFolderId);
+        for (VariableDefinition def : selectedVariables) {
+            moveDefinition(def, targetFolderId, targetPos++, false);
+        }
+        rebuildRuntimeMapsFromDefinitions();
+        savePreferences();
+        tableModel.fireTableDataChanged();
+        updateDetailsPanel(-1);
     }
 
-    private void deleteSelectedNode() {
-        int row = variablesTable.getSelectedRow();
-        if (row >= 0) deleteNode(tableModel.rowAt(row));
-    }
+    private void deleteSelectedNodes() {
+        int[] selectedRows = variablesTable.getSelectedRows();
+        if (selectedRows == null || selectedRows.length == 0) return;
 
-    private void deleteNode(TableRow row) {
-        if (row == null || (row.folderRow && row.ungrouped)) return;
-        if (row.variable != null) {
-            String key = qualifiedName(row.variable);
-            if (JOptionPane.showConfirmDialog(mainPanel, text("Delete variable '") + key + "'?", text("Delete Variable"),
-                    JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
-            definitions.remove(row.variable);
-        } else if (row.folder != null) {
-            List<VariableDefinition> children = definitions.stream().filter(v -> row.folder.getId().equals(v.getFolderId())).toList();
+        List<TableRow> targetRows = new ArrayList<>();
+        for (int r : selectedRows) {
+            TableRow row = tableModel.rowAt(r);
+            if (row != null && !(row.folderRow && row.ungrouped)) {
+                targetRows.add(row);
+            }
+        }
+        if (targetRows.isEmpty()) return;
+
+        List<VariableDefinition> varsToDelete = targetRows.stream()
+                .filter(r -> r.variable != null)
+                .map(r -> r.variable)
+                .distinct().toList();
+
+        List<VariableFolder> foldersToDelete = targetRows.stream()
+                .filter(r -> r.folder != null && r.folderRow)
+                .map(r -> r.folder)
+                .distinct().toList();
+
+        if (varsToDelete.isEmpty() && foldersToDelete.isEmpty()) return;
+
+        String message;
+        if (targetRows.size() == 1) {
+            TableRow single = targetRows.get(0);
+            if (single.variable != null) {
+                message = text("Delete variable '") + qualifiedName(single.variable) + "'?";
+            } else {
+                message = text("Delete folder '") + single.folder.getName() + "'?";
+            }
+        } else {
+            message = text("Delete ") + targetRows.size() + text(" selected items?");
+        }
+
+        if (JOptionPane.showConfirmDialog(mainPanel, message, text("Delete Selected"),
+                JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+
+        for (VariableFolder folder : foldersToDelete) {
+            List<VariableDefinition> children = definitions.stream()
+                    .filter(v -> folder.getId().equals(v.getFolderId()) && !varsToDelete.contains(v))
+                    .toList();
             if (!children.isEmpty()) {
                 Object[] options = {text("Move variables to Ungrouped"), text("Delete folder and variables"), text("Cancel")};
-                int choice = JOptionPane.showOptionDialog(mainPanel, text("Folder contains ") + children.size() + text(" variables."),
+                int choice = JOptionPane.showOptionDialog(mainPanel,
+                        text("Folder '") + folder.getName() + text("' contains ") + children.size() + text(" variables not selected for deletion."),
                         text("Delete Folder"), JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[2]);
                 if (choice == 0) {
-                    for (VariableDefinition child : children) {
-                        if (values.containsKey(child.getName()) && findDefinitionByKey(child.getName()) != child) {
-                            JOptionPane.showMessageDialog(mainPanel, text("Cannot move: '") + child.getName() + text("' already exists in Ungrouped."),
-                                    text("Delete Folder"), JOptionPane.ERROR_MESSAGE);
-                            return;
-                        }
-                    }
                     int rootPosition = countVariablesInFolder(null);
                     for (VariableDefinition child : children) {
                         child.setFolderId(null);
                         child.setPosition(rootPosition++);
                     }
-                } else if (choice == 1) definitions.removeAll(children);
-                else return;
+                } else if (choice == 1) {
+                    definitions.removeAll(children);
+                } else {
+                    return;
+                }
             }
-            folders.remove(row.folder);
-            folders.sort(Comparator.comparingInt(VariableFolder::getPosition));
-            for (int i = 0; i < folders.size(); i++) folders.get(i).setPosition(i);
         }
+
+        definitions.removeAll(varsToDelete);
+        folders.removeAll(foldersToDelete);
+        folders.sort(Comparator.comparingInt(VariableFolder::getPosition));
+        for (int i = 0; i < folders.size(); i++) folders.get(i).setPosition(i);
+
         rebuildRuntimeMapsFromDefinitions();
         savePreferences();
         tableModel.fireTableDataChanged();
@@ -2757,12 +2863,12 @@ public final class VariableManager {
 
     private class VariableRowTransferHandler extends TransferHandler {
         private static final long serialVersionUID = 1L;
-        private final DataFlavor rowFlavor = new DataFlavor(Integer.class, "Variable row");
+        private final DataFlavor rowsFlavor = new DataFlavor(int[].class, "Variable rows");
 
         @Override
         protected Transferable createTransferable(JComponent component) {
-            int sourceRow = variablesTable.getSelectedRow();
-            return sourceRow < 0 ? null : new VariableRowTransferable(sourceRow, rowFlavor);
+            int[] sourceRows = variablesTable.getSelectedRows();
+            return sourceRows == null || sourceRows.length == 0 ? null : new VariableRowTransferable(sourceRows, rowsFlavor);
         }
 
         @Override
@@ -2774,7 +2880,7 @@ public final class VariableManager {
         public boolean canImport(TransferSupport support) {
             return support.getComponent() == variablesTable
                     && support.isDrop()
-                    && support.isDataFlavorSupported(rowFlavor);
+                    && support.isDataFlavorSupported(rowsFlavor);
         }
 
         @Override
@@ -2784,49 +2890,49 @@ public final class VariableManager {
             }
 
             try {
-                int sourceRow = (Integer) support.getTransferable().getTransferData(rowFlavor);
+                int[] sourceRows = (int[]) support.getTransferable().getTransferData(rowsFlavor);
                 JTable.DropLocation dropLocation = (JTable.DropLocation) support.getDropLocation();
-                TableRow source = tableModel.rowAt(sourceRow);
                 int requestedDropRow = dropLocation.getRow();
                 int dropRow = Math.min(requestedDropRow, tableModel.getRowCount() - 1);
                 TableRow target = tableModel.rowAt(dropRow);
-                if (source == null || target == null) return false;
-                if (source.variable != null) {
-                    String folderId = target.folder != null ? target.folder.getId()
-                            : target.ungrouped ? null : target.variable.getFolderId();
+                if (target == null || sourceRows == null || sourceRows.length == 0) return false;
+
+                String folderId = target.folder != null ? target.folder.getId()
+                        : target.ungrouped ? null : target.variable != null ? target.variable.getFolderId() : null;
+
+                List<VariableDefinition> varsToMove = new ArrayList<>();
+                for (int r : sourceRows) {
+                    TableRow tr = tableModel.rowAt(r);
+                    if (tr != null && tr.variable != null) {
+                        varsToMove.add(tr.variable);
+                    }
+                }
+
+                if (!varsToMove.isEmpty()) {
                     int position = requestedDropRow >= tableModel.getRowCount() ? countVariablesInFolder(folderId)
                             : target.variable == null ? countVariablesInFolder(folderId) : target.variable.getPosition();
-                    return moveDefinition(source.variable, folderId, position, true);
-                }
-                VariableFolder targetFolder = target.folder != null ? target.folder
-                        : target.variable == null ? null : findFolder(target.variable.getFolderId());
-                if (source.folder != null && targetFolder != null && source.folder != targetFolder) {
-                    int old = source.folder.getPosition();
-                    int next = targetFolder.getPosition();
-                    for (VariableFolder folder : folders) {
-                        if (folder == source.folder) continue;
-                        if (old < next && folder.getPosition() > old && folder.getPosition() <= next) folder.setPosition(folder.getPosition() - 1);
-                        if (old > next && folder.getPosition() >= next && folder.getPosition() < old) folder.setPosition(folder.getPosition() + 1);
+                    boolean movedAny = false;
+                    for (VariableDefinition def : varsToMove) {
+                        if (moveDefinition(def, folderId, position++, true)) {
+                            movedAny = true;
+                        }
                     }
-                    source.folder.setPosition(next);
-                    savePreferences();
-                    tableModel.fireTableDataChanged();
-                    return true;
+                    return movedAny;
                 }
                 return false;
             } catch (UnsupportedFlavorException | IOException e) {
-                api.logging().logToError("Failed to reorder variable: " + e.getMessage());
+                api.logging().logToError("Failed to reorder variables: " + e.getMessage());
                 return false;
             }
         }
     }
 
     private static class VariableRowTransferable implements Transferable {
-        private final Integer row;
+        private final int[] rows;
         private final DataFlavor rowFlavor;
 
-        private VariableRowTransferable(int row, DataFlavor rowFlavor) {
-            this.row = row;
+        private VariableRowTransferable(int[] rows, DataFlavor rowFlavor) {
+            this.rows = rows;
             this.rowFlavor = rowFlavor;
         }
 
@@ -2845,7 +2951,7 @@ public final class VariableManager {
             if (!isDataFlavorSupported(flavor)) {
                 throw new UnsupportedFlavorException(flavor);
             }
-            return row;
+            return rows;
         }
     }
 
