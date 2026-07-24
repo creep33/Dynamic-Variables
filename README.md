@@ -17,6 +17,7 @@ Dynamic Variables is a Burp Suite extension that brings template variables and a
 - [Installation](#installation)
 - [Running the Test Suite](#running-the-test-suite)
 - [Dependencies](#dependencies)
+- [Contributing](#contributing)
 - [License](#license)
 
 ---
@@ -246,10 +247,20 @@ A successful run ends with `BUILD SUCCESSFUL`. Gradle writes the browsable repor
 
 ---
 
-## Dependencies
+## Contributing
 
-- Burp Suite Montoya API (provided by the Burp environment).
-- Zero third-party runtime dependencies.
+We welcome contributions from human developers and AI assistants alike! Before making changes or submitting a Pull Request, please review the developer documentation located in the `dev/` directory:
+
+- **[`dev/AGENTS.md`](dev/AGENTS.md)**: Contains project architecture details, code conventions, build/test commands, and strict development guidelines.
+- **[`dev/BAPP_STORE_CHECKLIST.md`](dev/BAPP_STORE_CHECKLIST.md)**: Checklists and verification steps covering PortSwigger's 12 BApp Store Acceptance Criteria.
+
+### Pull Request Requirements
+
+1. **Test Verification**: Ensure all unit tests pass cleanly by running `./gradlew test`.
+2. **GUI Responsiveness**: Never perform slow I/O or network calls on Swing's Event Dispatch Thread (EDT). Use background threads (`new Thread(...)`).
+3. **Burp Networking**: Use Montoya's `api.http().issueHttpRequest(...)` for all external HTTP communications to honor Burp upstream proxies and session rules.
+4. **Parent Containers for UI Dialogs**: Always specify `api.userInterface().swingUtils().suiteFrame()` as the parent window for modal dialogs or popups (`JDialog`, `JOptionPane`).
+5. **Clean Environment**: Do not commit local file system paths or confidential environment data.
 
 ---
 

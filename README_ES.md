@@ -17,6 +17,7 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 - [Instalación](#instalación)
 - [Ejecución de las pruebas](#ejecución-de-las-pruebas)
 - [Dependencias](#dependencias)
+- [Cómo colaborar](#cómo-colaborar)
 - [Licencia](#licencia)
 
 ---
@@ -257,10 +258,20 @@ Una ejecución correcta termina con `BUILD SUCCESSFUL`. Gradle escribe el inform
 
 ---
 
-## Dependencias
+## Cómo colaborar
 
-- API Montoya de Burp Suite, proporcionada por el entorno de Burp.
-- Sin dependencias de terceros en tiempo de ejecución.
+¡Toda contribución es bienvenida, ya sea por parte de desarrolladores humanos o asistentes de IA! Antes de realizar cambios o enviar una Pull Request, revisa la documentación técnica en el directorio `dev/`:
+
+- **[`dev/AGENTS.md`](dev/AGENTS.md)**: Contiene los detalles de arquitectura del proyecto, convenciones de código, comandos de compilación/pruebas y pautas estrictas de desarrollo.
+- **[`dev/BAPP_STORE_CHECKLIST.md`](dev/BAPP_STORE_CHECKLIST.md)**: Lista de verificación que cubre los 12 criterios de aceptación de PortSwigger para la BApp Store.
+
+### Requisitos para Pull Requests
+
+1. **Verificación de Pruebas**: Asegúrate de que todas las pruebas unitarias pasen sin errores ejecutando `./gradlew test`.
+2. **Reactividad de la GUI**: Nunca ejecutes operaciones de red o I/O lentas en el Event Dispatch Thread (EDT) de Swing. Utiliza hilos secundarios (`new Thread(...)`).
+3. **Red de Burp**: Utiliza `api.http().issueHttpRequest(...)` de Montoya para todas las comunicaciones HTTP externas a fin de respetar los proxys y reglas de sesión de Burp Suite.
+4. **Contenedor Padre para Diálogos**: Especifica siempre `api.userInterface().swingUtils().suiteFrame()` como ventana contenedora padre para diálogos modales o popups (`JDialog`, `JOptionPane`).
+5. **Entorno Limpio**: No incluyas rutas locales del sistema de archivos ni información confidencial en el código ni en la documentación.
 
 ---
 
