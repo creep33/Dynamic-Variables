@@ -493,7 +493,7 @@ public final class VariableManager {
             public void actionPerformed(java.awt.event.ActionEvent e) {
                 int row = variablesTable.getSelectedRow();
                 TableRow selected = tableModel.rowAt(row);
-                if (selected == null || selected.ungrouped) return;
+                if (selected == null || (selected.folderRow && selected.ungrouped)) return;
                 if (selected.variable != null) {
                     variablesTable.editCellAt(row, 0);
                     Component editor = variablesTable.getEditorComponent();
@@ -2555,7 +2555,7 @@ public final class VariableManager {
         VariableDefinition selectedVariable = tableRow == null ? null : tableRow.variable;
         JPopupMenu menu = new JPopupMenu();
         JMenuItem rename = new JMenuItem(text("Rename"));
-        rename.setEnabled(tableRow != null && !tableRow.ungrouped);
+        rename.setEnabled(tableRow != null && !(tableRow.folderRow && tableRow.ungrouped));
         rename.addActionListener(e -> renameNode(tableRow));
         JMenuItem copy = new JMenuItem(text("Copy Placeholder"));
         copy.setEnabled(selectedVariable != null);
@@ -2568,7 +2568,7 @@ public final class VariableManager {
                 : tableRow.folder != null ? tableRow.folder.getId()
                 : tableRow.variable != null ? tableRow.variable.getFolderId() : null));
         JMenuItem delete = new JMenuItem(text("Delete"));
-        delete.setEnabled(tableRow != null && !tableRow.ungrouped);
+        delete.setEnabled(tableRow != null && !(tableRow.folderRow && tableRow.ungrouped));
         delete.addActionListener(e -> deleteNode(tableRow));
         menu.add(rename);
         menu.add(copy);
@@ -2717,7 +2717,7 @@ public final class VariableManager {
     }
 
     private void deleteNode(TableRow row) {
-        if (row == null || row.ungrouped) return;
+        if (row == null || (row.folderRow && row.ungrouped)) return;
         if (row.variable != null) {
             String key = qualifiedName(row.variable);
             if (JOptionPane.showConfirmDialog(mainPanel, text("Delete variable '") + key + "'?", text("Delete Variable"),
