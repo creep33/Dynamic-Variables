@@ -7,6 +7,12 @@ import burp.api.montoya.http.HttpService;
 import burp.api.montoya.http.message.HttpHeader;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.http.message.requests.HttpRequest;
+import burp.api.montoya.http.message.responses.HttpResponse;
+import burp.api.montoya.ui.Selection;
+import burp.api.montoya.ui.editor.Editor;
+import burp.api.montoya.ui.editor.EditorOptions;
+import burp.api.montoya.ui.editor.HttpRequestEditor;
+import burp.api.montoya.ui.editor.HttpResponseEditor;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -31,6 +37,8 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class VariableManager {
+    record VariableListSnapshot(long revision, List<String> names, List<String> folders) {}
+
     private final MontoyaApi api;
     private final Object lock = new Object();
     private final List<String> variableNames = new ArrayList<>();
@@ -38,18 +46,19 @@ public final class VariableManager {
     private final Map<String, VariableExtractionRule> rules = new ConcurrentHashMap<>();
     private final List<VariableFolder> folders = new ArrayList<>();
     private final List<VariableDefinition> definitions = new ArrayList<>();
+    private volatile long variableRevision;
     private String variableSearch = "";
     private static final String STATE_V2_KEY = "dynamic_variables_state_v2";
     private static final String STATE_V3_KEY = "dynamic_variables_state_v3";
 
     private boolean replacementMasterEnabled = true;
     private boolean replacementEnabled = true;
-    private boolean replacementIntruderEnabled = true;
-    private boolean replacementScannerEnabled = true;
+    private boolean replacementIntruderEnabled = false;
+    private boolean replacementScannerEnabled = false;
     private boolean replacementProxyEnabled = false;
     private boolean extractionEnabled = true;
-    private boolean sessionRecoveryEnabled = false;
-    private boolean extractionDebugEnabled = false;
+    private boolean sessionRecoveryEnabled = true;
+    private boolean extractionDebugEnabled = true;
     private EnumSet<AutomationTool> extractionTools = EnumSet.of(AutomationTool.REPEATER);
     private EnumSet<AutomationTool> recoveryTools = EnumSet.of(AutomationTool.REPEATER);
     private String refreshStatusCodes = "401, 403";
@@ -64,16 +73,11 @@ public final class VariableManager {
     private JTextArea valueTextArea;
     
     private JCheckBox replacementMasterCheckBox;
-    private JCheckBox globalReplaceCheckBox;
-    private JCheckBox intruderReplaceCheckBox;
-    private JCheckBox scannerReplaceCheckBox;
-    private JCheckBox proxyReplaceCheckBox;
-    private JCheckBox globalExtractCheckBox;
-    private JCheckBox globalRecoveryCheckBox;
-    private JTextField refreshStatusCodesField;
-    private JLabel refreshStatusCodesLabel;
-    private JSeparator refreshStatusCodesSeparator;
     private JLabel placeholderUsageLabel;
+    private JLabel automationStatusLabel;
+    private CardLayout detailsCardLayout;
+    private JPanel detailsCards;
+    private JTabbedPane detailsTabs;
 
     // Rule Panel Components
     private JCheckBox ruleEnabledCheckBox;
@@ -94,6 +98,8 @@ public final class VariableManager {
     private JComboBox<String> sourceComboBox;
     private JTextField regexField;
     private JButton updateRuleButton;
+    private JToggleButton advancedMatchToggle;
+    private JPanel advancedMatchPanel;
 
     // Refresh Panel Components
     private JLabel savedRequestLabel;
@@ -138,6 +144,37 @@ public final class VariableManager {
         }
     }
 
+    VariableListSnapshot getVariableListSnapshot() {
+        synchronized (lock) {
+            return new VariableListSnapshot(
+                    variableRevision,
+                    List.copyOf(variableNames),
+                    folders.stream().sorted(Comparator.comparingInt(VariableFolder::getPosition))
+                            .map(VariableFolder::getName).toList());
+        }
+    }
+
+    boolean folderExists(String name) {
+        synchronized (lock) {
+            return findFolderByName(name == null ? "" : name.trim()) != null;
+        }
+    }
+
+    void createFolder(String name) {
+        String normalized = name == null ? "" : name.trim();
+        if (!VariableNames.isValidComponent(normalized)) {
+            throw new IllegalArgumentException("Invalid folder name");
+        }
+        synchronized (lock) {
+            if (findFolderByName(normalized) != null) {
+                throw new IllegalStateException("Folder already exists");
+            }
+            folders.add(new VariableFolder(normalized, folders.size()));
+            savePreferences();
+        }
+        if (tableModel != null) tableModel.fireTableDataChanged();
+    }
+
     public String getFolderNameForVariable(String qualifiedName) {
         synchronized (lock) {
             VariableDefinition definition = findDefinitionByKey(qualifiedName);
@@ -173,7 +210,8 @@ public final class VariableManager {
     }
 
     public void addOrUpdateExtractionRuleInFolder(String folderName, String localName, String value,
-                                                   boolean ruleEnabled, String matchUrl, String source,
+                                                   boolean ruleEnabled, boolean automaticRefreshEnabled,
+                                                   String matchUrl, String source,
                                                    String regex, String matchMethod, String reqBase64,
                                                    String host, int port, boolean secure) {
         String qualified = qualifyVariableName(folderName, localName);
@@ -188,7 +226,8 @@ public final class VariableManager {
                 rebuildRuntimeMapsFromDefinitions();
             }
         }
-        addOrUpdateExtractionRule(qualified, value, ruleEnabled, matchUrl, source, regex,
+        addOrUpdateExtractionRule(qualified, value, ruleEnabled, automaticRefreshEnabled,
+                matchUrl, source, regex,
                 matchMethod, reqBase64, host, port, secure);
     }
 
@@ -292,7 +331,8 @@ public final class VariableManager {
         });
     }
 
-    public void addOrUpdateExtractionRule(String name, String value, boolean ruleEnabled, String matchUrl, String source, 
+    public void addOrUpdateExtractionRule(String name, String value, boolean ruleEnabled,
+                                          boolean automaticRefreshEnabled, String matchUrl, String source,
                                           String regex, String matchMethod, String reqBase64,
                                           String host, int port, boolean secure) {
         synchronized (lock) {
@@ -316,9 +356,8 @@ public final class VariableManager {
             values.put(name, value);
             VariableExtractionRule rule = new VariableExtractionRule(ruleEnabled, matchUrl, source, regex, 
                     reqBase64, host, port, secure);
+            rule.setAutomaticRefreshEnabled(automaticRefreshEnabled);
             if (previousRule != null) {
-                rule.setEnabled(previousRule.isEnabled());
-                rule.setAutomaticRefreshEnabled(previousRule.isAutomaticRefreshEnabled());
                 rule.setAllowNonIdempotentReplay(previousRule.isAllowNonIdempotentReplay());
             }
             if (matchMethod != null && !matchMethod.isEmpty() && host != null && !host.isEmpty()) {
@@ -363,123 +402,70 @@ public final class VariableManager {
         }
         mainPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
 
-        // --- TOP GLOBAL SETTINGS PANEL ---
-        JPanel topPanel = new JPanel();
-        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
-        JPanel replacementPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 5));
-        JPanel automationPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 5));
-        
-        globalReplaceCheckBox = new JCheckBox("Repeater", replacementEnabled);
-        globalReplaceCheckBox.setFont(new Font(globalReplaceCheckBox.getFont().getName(), Font.BOLD, 12));
-        globalReplaceCheckBox.addActionListener(e -> {
-            replacementEnabled = globalReplaceCheckBox.isSelected();
-            savePreferences();
-        });
-
-        intruderReplaceCheckBox = new JCheckBox("Intruder", replacementIntruderEnabled);
-        intruderReplaceCheckBox.setFont(new Font(intruderReplaceCheckBox.getFont().getName(), Font.BOLD, 12));
-        intruderReplaceCheckBox.addActionListener(e -> {
-            replacementIntruderEnabled = intruderReplaceCheckBox.isSelected();
-            savePreferences();
-        });
-
-        scannerReplaceCheckBox = new JCheckBox("Scanner", replacementScannerEnabled);
-        scannerReplaceCheckBox.setFont(new Font(scannerReplaceCheckBox.getFont().getName(), Font.BOLD, 12));
-        scannerReplaceCheckBox.addActionListener(e -> {
-            replacementScannerEnabled = scannerReplaceCheckBox.isSelected();
-            savePreferences();
-        });
-
-        proxyReplaceCheckBox = new JCheckBox("Proxy", replacementProxyEnabled);
-        proxyReplaceCheckBox.setFont(new Font(proxyReplaceCheckBox.getFont().getName(), Font.BOLD, 12));
-        proxyReplaceCheckBox.addActionListener(e -> {
-            replacementProxyEnabled = proxyReplaceCheckBox.isSelected();
-            savePreferences();
-        });
-
-        // Set initial visibility of tool checkboxes based on master checkbox state
-        globalReplaceCheckBox.setVisible(replacementMasterEnabled);
-        intruderReplaceCheckBox.setVisible(replacementMasterEnabled);
-        scannerReplaceCheckBox.setVisible(replacementMasterEnabled);
-        proxyReplaceCheckBox.setVisible(replacementMasterEnabled);
-
+        // --- COMPACT STATUS BAR ---
         replacementMasterCheckBox = new JCheckBox(text("Enable Variable Replacement"), replacementMasterEnabled);
         replacementMasterCheckBox.setFont(new Font(replacementMasterCheckBox.getFont().getName(), Font.BOLD, 12));
+        JCheckBox repeaterReplacementCheckBox = new JCheckBox("Repeater", replacementEnabled);
+        JCheckBox intruderReplacementCheckBox = new JCheckBox("Intruder", replacementIntruderEnabled);
+        JCheckBox scannerReplacementCheckBox = new JCheckBox("Scanner", replacementScannerEnabled);
+        JCheckBox proxyReplacementCheckBox = new JCheckBox("Proxy", replacementProxyEnabled);
+        List<JCheckBox> replacementToolCheckBoxes = List.of(
+                repeaterReplacementCheckBox,
+                intruderReplacementCheckBox,
+                scannerReplacementCheckBox,
+                proxyReplacementCheckBox);
+        Runnable updateReplacementToolVisibility = () -> {
+            boolean visible = replacementMasterCheckBox.isSelected();
+            for (JCheckBox checkBox : replacementToolCheckBoxes) {
+                checkBox.setVisible(visible);
+            }
+        };
         replacementMasterCheckBox.addActionListener(e -> {
             replacementMasterEnabled = replacementMasterCheckBox.isSelected();
-            boolean visible = replacementMasterEnabled;
-            globalReplaceCheckBox.setVisible(visible);
-            intruderReplaceCheckBox.setVisible(visible);
-            scannerReplaceCheckBox.setVisible(visible);
-            proxyReplaceCheckBox.setVisible(visible);
-            savePreferences();
-            replacementPanel.revalidate();
-            replacementPanel.repaint();
-        });
-
-        globalExtractCheckBox = new JCheckBox(text("Enable Response Auto-Extraction"), extractionEnabled);
-        globalExtractCheckBox.setFont(new Font(globalExtractCheckBox.getFont().getName(), Font.BOLD, 12));
-        globalExtractCheckBox.setToolTipText(text("Automatically extracts variable values from responses to keep them updated in the background."));
-        globalExtractCheckBox.addActionListener(e -> {
-            extractionEnabled = globalExtractCheckBox.isSelected();
+            updateReplacementToolVisibility.run();
+            updateGlobalStatusLabels();
             savePreferences();
         });
-
-        globalRecoveryCheckBox = new JCheckBox(
-                text("Enable automatic session recovery (401/403)"), sessionRecoveryEnabled);
-        globalRecoveryCheckBox.setFont(new Font(
-                globalRecoveryCheckBox.getFont().getName(), Font.BOLD, 12));
-        globalRecoveryCheckBox.setToolTipText(text(
-                "Refreshes enabled variables and retries authorized requests after configured status codes."));
-        globalRecoveryCheckBox.addActionListener(e -> {
-            sessionRecoveryEnabled = globalRecoveryCheckBox.isSelected();
-            updateRecoveryControlsVisibility();
+        repeaterReplacementCheckBox.addActionListener(e -> {
+            replacementEnabled = repeaterReplacementCheckBox.isSelected();
             savePreferences();
         });
-
-        replacementPanel.add(replacementMasterCheckBox);
-        replacementPanel.add(globalReplaceCheckBox);
-        replacementPanel.add(intruderReplaceCheckBox);
-        replacementPanel.add(scannerReplaceCheckBox);
-        replacementPanel.add(proxyReplaceCheckBox);
-        
-        // Custom vertical divider
-        JSeparator separator = new JSeparator(JSeparator.VERTICAL);
-        separator.setPreferredSize(new Dimension(3, 20));
-        replacementPanel.add(separator);
-        
-        automationPanel.add(globalExtractCheckBox);
-        automationPanel.add(globalRecoveryCheckBox);
-
-        // Custom vertical divider 2
-        refreshStatusCodesSeparator = new JSeparator(JSeparator.VERTICAL);
-        refreshStatusCodesSeparator.setPreferredSize(new Dimension(3, 20));
-        automationPanel.add(refreshStatusCodesSeparator);
-
-        refreshStatusCodesLabel = new JLabel(text("Refresh Status Codes:"));
-        refreshStatusCodesLabel.setToolTipText(text("HTTP status codes (comma separated) that trigger an automatic token refresh (e.g., 401, 403)."));
-        automationPanel.add(refreshStatusCodesLabel);
-        refreshStatusCodesField = new JTextField(refreshStatusCodes, 8);
-        refreshStatusCodesField.setToolTipText(text("HTTP status codes (comma separated) that trigger an automatic token refresh (e.g., 401, 403)."));
-        refreshStatusCodesField.getDocument().addDocumentListener(new SimpleDocumentListener(() -> {
-            refreshStatusCodes = refreshStatusCodesField.getText();
+        intruderReplacementCheckBox.addActionListener(e -> {
+            replacementIntruderEnabled = intruderReplacementCheckBox.isSelected();
             savePreferences();
-        }));
-        automationPanel.add(refreshStatusCodesField);
-
-        JSeparator separator3 = new JSeparator(JSeparator.VERTICAL);
-        separator3.setPreferredSize(new Dimension(3, 20));
-        automationPanel.add(separator3);
+        });
+        scannerReplacementCheckBox.addActionListener(e -> {
+            replacementScannerEnabled = scannerReplacementCheckBox.isSelected();
+            savePreferences();
+        });
+        proxyReplacementCheckBox.addActionListener(e -> {
+            replacementProxyEnabled = proxyReplacementCheckBox.isSelected();
+            savePreferences();
+        });
 
         JButton settingsButton = new JButton(text("Configuration..."));
         settingsButton.setToolTipText(text("Configure the interface language and the optional tag that uniquely identifies variable placeholders."));
         settingsButton.addActionListener(e -> showPlaceholderSettingsDialog());
-        automationPanel.add(settingsButton);
 
-        topPanel.add(replacementPanel);
-        topPanel.add(automationPanel);
-        updateRecoveryControlsVisibility();
-
+        JPanel topPanel = new JPanel(new BorderLayout(12, 0));
+        topPanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(0, 0, 0, 35)),
+                new EmptyBorder(0, 0, 8, 0)));
+        JPanel primaryStatus = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
+        primaryStatus.add(replacementMasterCheckBox);
+        primaryStatus.add(repeaterReplacementCheckBox);
+        primaryStatus.add(intruderReplacementCheckBox);
+        primaryStatus.add(scannerReplacementCheckBox);
+        primaryStatus.add(proxyReplacementCheckBox);
+        updateReplacementToolVisibility.run();
+        automationStatusLabel = new JLabel();
+        automationStatusLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+        JPanel settingsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 3));
+        settingsPanel.add(automationStatusLabel);
+        settingsPanel.add(settingsButton);
+        topPanel.add(primaryStatus, BorderLayout.WEST);
+        topPanel.add(settingsPanel, BorderLayout.EAST);
+        updateGlobalStatusLabels();
         mainPanel.add(topPanel, BorderLayout.NORTH);
 
         // --- CENTER SPLIT PANE ---
@@ -574,7 +560,7 @@ public final class VariableManager {
         JButton addFolderButton = new JButton(text("New Folder"));
         JButton addButton = new JButton(text("New Variable"));
         JButton deleteButton = new JButton(text("Delete Selected"));
-        JButton clearButton = new JButton(text("Clear All"));
+        JButton moreButton = new JButton(text("More..."));
 
         addFolderButton.addActionListener(e -> createFolderDialog());
         addButton.addActionListener(e -> createVariableDialog(selectedFolderId()));
@@ -583,7 +569,8 @@ public final class VariableManager {
             deleteSelectedNode();
         });
 
-        clearButton.addActionListener(e -> {
+        JMenuItem clearAllItem = new JMenuItem(text("Clear All"));
+        clearAllItem.addActionListener(e -> {
             int confirm = JOptionPane.showConfirmDialog(mainPanel, text("Are you sure you want to clear all variables?"), text("Confirm Clear"), JOptionPane.YES_NO_OPTION);
             if (confirm == JOptionPane.YES_OPTION) {
                 synchronized (lock) {
@@ -599,29 +586,29 @@ public final class VariableManager {
                 clearRuleFields();
             }
         });
+        JPopupMenu moreMenu = new JPopupMenu();
+        moreMenu.add(clearAllItem);
+        moreButton.addActionListener(e -> moreMenu.show(moreButton, 0, moreButton.getHeight()));
 
         buttonPanel.add(addFolderButton);
         buttonPanel.add(addButton);
         buttonPanel.add(deleteButton);
-        buttonPanel.add(clearButton);
+        buttonPanel.add(moreButton);
         leftPanel.add(buttonPanel, BorderLayout.SOUTH);
-
-        // Right Side: Variable Details, Regex Configuration, and Refresh Action
-        JPanel rightPanel = new JPanel(new GridBagLayout());
-        rightPanel.setBorder(new EmptyBorder(0, 10, 0, 0));
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.BOTH;
-        gbc.insets = new Insets(5, 5, 5, 5);
 
         // 1. Current Value JTextArea
         JPanel valuePanel = new JPanel(new BorderLayout(5, 5));
         valuePanel.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createEtchedBorder(),
-                text("Variable Value Editor (Paste long values here)"),
+                text("Current value"),
                 TitledBorder.LEFT,
                 TitledBorder.TOP,
                 new Font(mainPanel.getFont().getName(), Font.BOLD, 12)
         ));
+        JLabel valueHint = new JLabel(text("Changes are saved automatically."));
+        valueHint.setForeground(UIManager.getColor("Label.disabledForeground"));
+        valueHint.setBorder(new EmptyBorder(0, 4, 4, 0));
+        valuePanel.add(valueHint, BorderLayout.NORTH);
         valueTextArea = new JTextArea(5, 20);
         valueTextArea.setLineWrap(true);
         valueTextArea.setWrapStyleWord(true);
@@ -651,47 +638,125 @@ public final class VariableManager {
         });
         valuePanel.add(new JScrollPane(valueTextArea), BorderLayout.CENTER);
 
-        // 2. Extraction Rule Editor Panel
-        JPanel rulePanel = new JPanel(new GridBagLayout());
+        // 2. Extraction Rule Editor Panel. The common path stays visible while
+        // request matching details are progressively disclosed.
+        JPanel rulePanel = new JPanel();
+        rulePanel.setLayout(new BoxLayout(rulePanel, BoxLayout.Y_AXIS));
         rulePanel.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createEtchedBorder(), 
-                text("Response Auto-Extraction Rule"),
+                text("Variable automation"),
                 TitledBorder.LEFT, 
                 TitledBorder.TOP, 
                 new Font(mainPanel.getFont().getName(), Font.PLAIN, 12)
         ));
         
+        ruleEnabledCheckBox = new JCheckBox(text("Update this variable from matching responses"));
+        ruleEnabledCheckBox.setToolTipText(text(
+                "Requires global response extraction and extraction for the current Burp tool to be enabled."));
+        ruleEnabledCheckBox.addActionListener(e -> handleRuleActivation(ruleEnabledCheckBox, false));
+        ruleEnabledCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        rulePanel.add(ruleEnabledCheckBox);
+        JLabel passiveExtractionExplanation = automationExplanationLabel(text(
+                "Matching responses update the value passively; no request is retried."));
+        passiveExtractionExplanation.setAlignmentX(Component.LEFT_ALIGNMENT);
+        rulePanel.add(passiveExtractionExplanation);
+        rulePanel.add(Box.createVerticalStrut(6));
+
+        automaticRefreshCheckBox = new JCheckBox(text("Use this variable for expired-session recovery"));
+        automaticRefreshCheckBox.setToolTipText(text(
+                "Requires global session recovery, recovery for the current Burp tool, and a saved refresh request."));
+        automaticRefreshCheckBox.addActionListener(e -> handleRuleActivation(automaticRefreshCheckBox, true));
+        automaticRefreshCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        rulePanel.add(automaticRefreshCheckBox);
+        JLabel sessionRecoveryExplanation = automationExplanationLabel(text(
+                "After a configured status, the saved request obtains a new value and the original request is retried."));
+        sessionRecoveryExplanation.setAlignmentX(Component.LEFT_ALIGNMENT);
+        rulePanel.add(sessionRecoveryExplanation);
+        rulePanel.add(Box.createVerticalStrut(6));
+
+        JPanel extractionPanel = new JPanel(new GridBagLayout());
+        extractionPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        GridBagConstraints egbc = new GridBagConstraints();
+        egbc.fill = GridBagConstraints.HORIZONTAL;
+        egbc.insets = new Insets(4, 5, 4, 5);
+        egbc.gridy = 0;
+        egbc.gridx = 0;
+        egbc.weightx = 0.0;
+        extractionPanel.add(new JLabel(text("Extract From:")), egbc);
+        sourceComboBox = new JComboBox<>(new String[]{
+            text("Response Body"), text("Response Headers"), text("Request Body"), text("Request Headers")
+        });
+        sourceComboBox.addActionListener(e -> updateActiveRuleFromUI());
+        egbc.gridx = 1;
+        egbc.weightx = 1.0;
+        extractionPanel.add(sourceComboBox, egbc);
+
+        egbc.gridy = 1;
+        egbc.gridx = 0;
+        egbc.weightx = 0.0;
+        extractionPanel.add(new JLabel(text("Regex (with 1 capture group):")), egbc);
+        regexField = new JTextField();
+        regexField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        egbc.gridx = 1;
+        egbc.weightx = 1.0;
+        extractionPanel.add(regexField, egbc);
+
+        egbc.gridy = 2;
+        egbc.gridx = 0;
+        egbc.gridwidth = 2;
+        updateRuleButton = new JButton(text("Update Rule from Response..."));
+        updateRuleButton.addActionListener(e -> triggerUpdateRuleFromResponse());
+        extractionPanel.add(updateRuleButton, egbc);
+        rulePanel.add(extractionPanel);
+
+        advancedMatchToggle = new JToggleButton(text("Show advanced automation options"));
+        advancedMatchToggle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        advancedMatchToggle.setToolTipText(text(
+                "Configure passive-extraction matching and session-recovery retry safety."));
+        rulePanel.add(advancedMatchToggle);
+
+        advancedMatchPanel = new JPanel(new GridBagLayout());
+        advancedMatchPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        advancedMatchPanel.setBorder(new EmptyBorder(2, 18, 2, 0));
         GridBagConstraints rgbc = new GridBagConstraints();
         rgbc.fill = GridBagConstraints.HORIZONTAL;
         rgbc.insets = new Insets(4, 5, 4, 5);
         rgbc.gridx = 0;
 
-        // Checkbox: Enable rule
-        ruleEnabledCheckBox = new JCheckBox(text("Enable auto-extraction for this variable"));
-        ruleEnabledCheckBox.addActionListener(e -> handleRuleActivation(ruleEnabledCheckBox, false));
+        JPanel retrySafetyPanel = new JPanel();
+        retrySafetyPanel.setLayout(new BoxLayout(retrySafetyPanel, BoxLayout.Y_AXIS));
+        retrySafetyPanel.setBorder(BorderFactory.createTitledBorder(text("Session recovery retry safety")));
+        allowNonIdempotentReplayCheckBox = new JCheckBox(
+                text("In session recovery, allow retrying non-idempotent requests"));
+        allowNonIdempotentReplayCheckBox.setToolTipText(text(
+                "Allows retrying methods such as POST, PUT, PATCH, and DELETE after refreshing the value. Enable only when repeating the operation is safe."));
+        allowNonIdempotentReplayCheckBox.addActionListener(e -> updateActiveRuleFromUI());
+        retrySafetyPanel.add(allowNonIdempotentReplayCheckBox);
+        JLabel retrySafetyExplanation = automationExplanationLabel(text(
+                "Allows retrying methods such as POST, PUT, PATCH, and DELETE after refreshing the value. Enable only when repeating the operation is safe."));
+        retrySafetyPanel.add(retrySafetyExplanation);
         rgbc.gridy = 0;
         rgbc.gridwidth = 2;
-        rulePanel.add(ruleEnabledCheckBox, rgbc);
+        advancedMatchPanel.add(retrySafetyPanel, rgbc);
 
-        automaticRefreshCheckBox = new JCheckBox(text("Enable automatic refresh for this variable"));
-        automaticRefreshCheckBox.addActionListener(e -> handleRuleActivation(automaticRefreshCheckBox, true));
+        JPanel passiveMatchingExplanation = new JPanel();
+        passiveMatchingExplanation.setLayout(new BoxLayout(passiveMatchingExplanation, BoxLayout.Y_AXIS));
+        passiveMatchingExplanation.setBorder(BorderFactory.createTitledBorder(
+                text("Passive extraction request matching")));
+        passiveMatchingExplanation.add(automationExplanationLabel(text(
+                "Every configured filter must match. The path does not include the query string.")));
+        passiveMatchingExplanation.add(automationExplanationLabel(text(
+                "An empty query and a None discriminator do not filter requests.")));
+        passiveMatchingExplanation.add(automationExplanationLabel(text(
+                "Literal requires an exact match; a regular expression only needs to find a match.")));
         rgbc.gridy = 1;
-        rulePanel.add(automaticRefreshCheckBox, rgbc);
-
-        allowNonIdempotentReplayCheckBox = new JCheckBox(
-                text("Allow replay of non-idempotent requests"));
-        allowNonIdempotentReplayCheckBox.setToolTipText(text(
-                "Allows automatic replay of methods other than GET, HEAD, and OPTIONS."));
-        allowNonIdempotentReplayCheckBox.addActionListener(e -> updateActiveRuleFromUI());
-        rgbc.gridy = 2;
-        rulePanel.add(allowNonIdempotentReplayCheckBox, rgbc);
+        advancedMatchPanel.add(passiveMatchingExplanation, rgbc);
 
         rgbc.gridwidth = 1;
-
-        rgbc.gridy = 3;
+        rgbc.gridy = 2;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Matching mode:")), rgbc);
+        advancedMatchPanel.add(new JLabel(text("Matching mode:")), rgbc);
         JPanel strategyPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
         matchStrategyLabel = new JLabel();
         convertMatchButton = new JButton(text("Convert to explicit filters"));
@@ -700,26 +765,38 @@ public final class VariableManager {
         strategyPanel.add(convertMatchButton);
         rgbc.gridx = 1;
         rgbc.weightx = 1.0;
-        rulePanel.add(strategyPanel, rgbc);
+        advancedMatchPanel.add(strategyPanel, rgbc);
+
+        rgbc.gridy = 3;
+        rgbc.gridx = 0;
+        rgbc.weightx = 0.0;
+        JLabel methodLabel = new JLabel(text("Method:"));
+        methodLabel.setToolTipText(text(
+                "The HTTP method must match exactly, ignoring letter case."));
+        advancedMatchPanel.add(methodLabel, rgbc);
+        matchMethodField = new JTextField();
+        matchMethodField.setToolTipText(text(
+                "The HTTP method must match exactly, ignoring letter case."));
+        matchMethodField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        rgbc.gridx = 1;
+        rgbc.weightx = 1.0;
+        advancedMatchPanel.add(matchMethodField, rgbc);
 
         rgbc.gridy = 4;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Method:")), rgbc);
-        matchMethodField = new JTextField();
-        matchMethodField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        rulePanel.add(matchMethodField, rgbc);
-
-        rgbc.gridy = 5;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Service:")), rgbc);
+        JLabel serviceLabel = new JLabel(text("Service:"));
+        serviceLabel.setToolTipText(text(
+                "Host, port, and HTTP or HTTPS must all match exactly."));
+        advancedMatchPanel.add(serviceLabel, rgbc);
         JPanel servicePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
         matchHostField = new JTextField(16);
         matchPortField = new JTextField(5);
         matchSecureCheckBox = new JCheckBox("HTTPS");
+        String serviceToolTip = text("Host, port, and HTTP or HTTPS must all match exactly.");
+        matchHostField.setToolTipText(serviceToolTip);
+        matchPortField.setToolTipText(serviceToolTip);
+        matchSecureCheckBox.setToolTipText(serviceToolTip);
         matchHostField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         matchPortField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         matchSecureCheckBox.addActionListener(e -> updateActiveRuleFromUI());
@@ -728,87 +805,76 @@ public final class VariableManager {
         servicePanel.add(matchSecureCheckBox);
         rgbc.gridx = 1;
         rgbc.weightx = 1.0;
-        rulePanel.add(servicePanel, rgbc);
+        advancedMatchPanel.add(servicePanel, rgbc);
 
-        rgbc.gridy = 6;
+        rgbc.gridy = 5;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Path filter:")), rgbc);
+        JLabel pathLabel = new JLabel(text("Path filter:"));
+        String pathToolTip = text(
+                "Matches only the path, without query parameters. Literal compares the full path; a regular expression searches for a match.");
+        pathLabel.setToolTipText(pathToolTip);
+        advancedMatchPanel.add(pathLabel, rgbc);
         JPanel pathPanel = new JPanel(new BorderLayout(5, 0));
         pathModeComboBox = new JComboBox<>(new String[]{text("Literal"), text("Regular expression")});
+        pathModeComboBox.setToolTipText(pathToolTip);
         pathModeComboBox.addActionListener(e -> updateActiveRuleFromUI());
         matchUrlField = new JTextField();
+        matchUrlField.setToolTipText(pathToolTip);
         matchUrlField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         pathPanel.add(pathModeComboBox, BorderLayout.WEST);
         pathPanel.add(matchUrlField, BorderLayout.CENTER);
         rgbc.gridx = 1;
         rgbc.weightx = 1.0;
-        rulePanel.add(pathPanel, rgbc);
+        advancedMatchPanel.add(pathPanel, rgbc);
 
-        rgbc.gridy = 7;
+        rgbc.gridy = 6;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Query filter:")), rgbc);
+        JLabel queryLabel = new JLabel(text("Query filter:"));
+        String queryToolTip = text(
+                "Optional. Matches the complete raw query string. Leave empty to accept any query.");
+        queryLabel.setToolTipText(queryToolTip);
+        advancedMatchPanel.add(queryLabel, rgbc);
         JPanel queryPanel = new JPanel(new BorderLayout(5, 0));
         queryModeComboBox = new JComboBox<>(new String[]{text("Literal"), text("Regular expression")});
+        queryModeComboBox.setToolTipText(queryToolTip);
         queryModeComboBox.addActionListener(e -> updateActiveRuleFromUI());
         queryField = new JTextField();
+        queryField.setToolTipText(queryToolTip);
         queryField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         queryPanel.add(queryModeComboBox, BorderLayout.WEST);
         queryPanel.add(queryField, BorderLayout.CENTER);
         rgbc.gridx = 1;
         rgbc.weightx = 1.0;
-        rulePanel.add(queryPanel, rgbc);
+        advancedMatchPanel.add(queryPanel, rgbc);
 
-        rgbc.gridy = 8;
+        rgbc.gridy = 7;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Request discriminator:")), rgbc);
+        JLabel discriminatorLabel = new JLabel(text("Request discriminator:"));
+        String discriminatorToolTip = text(
+                "Optional. A regular expression must match the selected request body or headers. Use it to distinguish requests to the same endpoint.");
+        discriminatorLabel.setToolTipText(discriminatorToolTip);
+        advancedMatchPanel.add(discriminatorLabel, rgbc);
         JPanel discriminatorPanel = new JPanel(new BorderLayout(5, 0));
         discriminatorSourceComboBox = new JComboBox<>(new String[]{
                 text("None"), text("Request Body"), text("Request Headers")});
+        discriminatorSourceComboBox.setToolTipText(discriminatorToolTip);
         discriminatorSourceComboBox.addActionListener(e -> updateActiveRuleFromUI());
         discriminatorRegexField = new JTextField();
+        discriminatorRegexField.setToolTipText(discriminatorToolTip);
         discriminatorRegexField.getDocument().addDocumentListener(
                 new SimpleDocumentListener(this::updateActiveRuleFromUI));
         discriminatorPanel.add(discriminatorSourceComboBox, BorderLayout.WEST);
         discriminatorPanel.add(discriminatorRegexField, BorderLayout.CENTER);
         rgbc.gridx = 1;
         rgbc.weightx = 1.0;
-        rulePanel.add(discriminatorPanel, rgbc);
-
-        rgbc.gridy = 9;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Extract From:")), rgbc);
-
-        sourceComboBox = new JComboBox<>(new String[]{
-            text("Response Body"), text("Response Headers"), text("Request Body"), text("Request Headers")
-        });
-        sourceComboBox.addActionListener(e -> updateActiveRuleFromUI());
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        rulePanel.add(sourceComboBox, rgbc);
-
-        rgbc.gridy = 10;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Regex (with 1 capture group):")), rgbc);
-
-        regexField = new JTextField();
-        regexField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        rulePanel.add(regexField, rgbc);
-
-        rgbc.gridy = 11;
-        rgbc.gridx = 0;
-        rgbc.gridwidth = 2;
-        updateRuleButton = new JButton(text("Update Rule from Response..."));
-        updateRuleButton.addActionListener(e -> triggerUpdateRuleFromResponse());
-        rulePanel.add(updateRuleButton, rgbc);
-
-        rgbc.gridwidth = 1; // reset
+        advancedMatchPanel.add(discriminatorPanel, rgbc);
+        advancedMatchPanel.setVisible(false);
+        advancedMatchToggle.addActionListener(e ->
+                setAdvancedMatchingExpanded(advancedMatchToggle.isSelected()));
+        rulePanel.add(advancedMatchPanel);
 
         // 3. Refresh Action Panel (background request sender, edit request & send to repeater)
         JPanel refreshPanel = new JPanel(new BorderLayout(5, 5));
@@ -835,33 +901,41 @@ public final class VariableManager {
         refreshButtonsPanel.add(editRequestButton);
         refreshPanel.add(refreshButtonsPanel, BorderLayout.CENTER);
 
-        // ADD PANES TO THE DETAILS PANEL IN THE SPECIFIED LAYOUT POSITIONS:
-        // Refresh Panel (Row 0) - height adjusted to content
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.weightx = 1.0;
-        gbc.weighty = 0.0;
-        rightPanel.add(refreshPanel, gbc);
+        detailsTabs = new JTabbedPane();
+        detailsTabs.addTab(text("Value"), valuePanel);
 
-        // Extraction Rule Panel (Row 1) - height adjusted to content
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.weightx = 1.0;
-        gbc.weighty = 0.0;
-        rightPanel.add(rulePanel, gbc);
+        JPanel automationDetails = new JPanel(new BorderLayout(5, 8));
+        automationDetails.setBorder(new EmptyBorder(8, 8, 8, 8));
+        automationDetails.add(refreshPanel, BorderLayout.NORTH);
+        JPanel ruleContainer = new JPanel(new BorderLayout());
+        ruleContainer.add(rulePanel, BorderLayout.NORTH);
+        JScrollPane ruleScrollPane = new JScrollPane(ruleContainer);
+        ruleScrollPane.setBorder(null);
+        ruleScrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        automationDetails.add(ruleScrollPane, BorderLayout.CENTER);
+        detailsTabs.addTab(text("Automation"), automationDetails);
 
-        // Value Editor Panel (Row 2) - expands to occupy all remaining space
-        gbc.gridx = 0;
-        gbc.gridy = 2;
-        gbc.weightx = 1.0;
-        gbc.weighty = 1.0;
-        rightPanel.add(valuePanel, gbc);
+        JPanel emptyDetailsPanel = new JPanel(new GridBagLayout());
+        JPanel emptyMessagePanel = new JPanel();
+        emptyMessagePanel.setLayout(new BoxLayout(emptyMessagePanel, BoxLayout.Y_AXIS));
+        JLabel emptyTitle = new JLabel(text("Select a variable"));
+        emptyTitle.setFont(emptyTitle.getFont().deriveFont(Font.BOLD, 16f));
+        emptyTitle.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JLabel emptyHint = new JLabel(text("Choose a variable on the left to edit its value or configure automation."));
+        emptyHint.setForeground(UIManager.getColor("Label.disabledForeground"));
+        emptyHint.setAlignmentX(Component.CENTER_ALIGNMENT);
+        emptyMessagePanel.add(emptyTitle);
+        emptyMessagePanel.add(Box.createVerticalStrut(6));
+        emptyMessagePanel.add(emptyHint);
+        emptyDetailsPanel.add(emptyMessagePanel);
+
+        detailsCardLayout = new CardLayout();
+        detailsCards = new JPanel(detailsCardLayout);
+        detailsCards.add(emptyDetailsPanel, "empty");
+        detailsCards.add(detailsTabs, "variable");
 
         splitPane.setLeftComponent(leftPanel);
-        JScrollPane detailsScrollPane = new JScrollPane(rightPanel);
-        detailsScrollPane.setBorder(null);
-        detailsScrollPane.getVerticalScrollBar().setUnitIncrement(16);
-        splitPane.setRightComponent(detailsScrollPane);
+        splitPane.setRightComponent(detailsCards);
         mainPanel.add(splitPane, BorderLayout.CENTER);
 
         // --- FOOTER INSTRUCTIONS ---
@@ -892,6 +966,19 @@ public final class VariableManager {
         JCheckBox tagEnabledCheckBox = new JCheckBox(text("Use a tag in variable placeholders"), placeholderTagEnabled);
         JCheckBox diagnosticCheckBox = new JCheckBox(
                 text("Enable auto-extraction diagnostic logs"), extractionDebugEnabled);
+        JCheckBox extractionEnabledCheckBox = new JCheckBox(
+                text("Extract variable values from matching responses"), extractionEnabled);
+        String extractionExplanation = text(
+                "Updates enabled variables when a response matches their extraction rule. It does not retry the request.");
+        extractionEnabledCheckBox.setToolTipText(extractionExplanation);
+        JCheckBox recoveryEnabledCheckBox = new JCheckBox(
+                text("Recover expired sessions and retry requests"), sessionRecoveryEnabled);
+        String recoveryExplanation = text(
+                "After a configured status code, runs the saved refresh request and retries the original request. Requires refresh to be enabled for the variable.");
+        recoveryEnabledCheckBox.setToolTipText(recoveryExplanation);
+        JTextField statusCodesField = new JTextField(refreshStatusCodes, 10);
+        statusCodesField.setToolTipText(text(
+                "HTTP status codes (comma separated) that trigger an automatic token refresh (e.g., 401, 403)."));
         Map<AutomationTool, JCheckBox> extractionToolChecks = new EnumMap<>(AutomationTool.class);
         Map<AutomationTool, JCheckBox> recoveryToolChecks = new EnumMap<>(AutomationTool.class);
         JTextField tagField = new JTextField(placeholderTag, 20);
@@ -948,31 +1035,93 @@ public final class VariableManager {
         behaviorNotice.add(new JLabel(text("Existing requests are not rewritten automatically. When tagging is enabled,")));
         behaviorNotice.add(new JLabel(text("only placeholders containing the configured tag are replaced.")));
         panel.add(behaviorNotice, gbc);
-        gbc.gridy = 7;
-        panel.add(diagnosticCheckBox, gbc);
-
-        gbc.gridy = 8;
-        JPanel automationScopePanel = new JPanel(new GridLayout(0, 3, 8, 4));
+        JPanel automationScopePanel = new JPanel();
         automationScopePanel.setBorder(BorderFactory.createTitledBorder(text("Automation tool scope")));
-        automationScopePanel.add(new JLabel(text("Tool")));
-        automationScopePanel.add(new JLabel(text("Response extraction")));
-        automationScopePanel.add(new JLabel(text("Session recovery")));
         for (AutomationTool tool : AutomationTool.values()) {
             JCheckBox extraction = new JCheckBox("", extractionTools.contains(tool));
             JCheckBox recovery = new JCheckBox("", recoveryTools.contains(tool));
             extractionToolChecks.put(tool, extraction);
             recoveryToolChecks.put(tool, recovery);
-            automationScopePanel.add(new JLabel(tool.name().charAt(0)
-                    + tool.name().substring(1).toLowerCase(Locale.ROOT)));
-            automationScopePanel.add(extraction);
-            automationScopePanel.add(recovery);
         }
-        panel.add(automationScopePanel, gbc);
+        Runnable updateAutomationScope = () -> {
+            boolean showExtraction = extractionEnabledCheckBox.isSelected();
+            boolean showRecovery = recoveryEnabledCheckBox.isSelected();
+            automationScopePanel.removeAll();
+            automationScopePanel.setVisible(showExtraction || showRecovery);
+            if (showExtraction || showRecovery) {
+                int columns = 1 + (showExtraction ? 1 : 0) + (showRecovery ? 1 : 0);
+                automationScopePanel.setLayout(new GridLayout(0, columns, 8, 4));
+                automationScopePanel.add(new JLabel(text("Tool")));
+                if (showExtraction) {
+                    automationScopePanel.add(new JLabel(text("Response extraction")));
+                }
+                if (showRecovery) {
+                    automationScopePanel.add(new JLabel(text("Session recovery")));
+                }
+                for (AutomationTool tool : AutomationTool.values()) {
+                    automationScopePanel.add(new JLabel(tool.name().charAt(0)
+                            + tool.name().substring(1).toLowerCase(Locale.ROOT)));
+                    if (showExtraction) {
+                        automationScopePanel.add(extractionToolChecks.get(tool));
+                    }
+                    if (showRecovery) {
+                        automationScopePanel.add(recoveryToolChecks.get(tool));
+                    }
+                }
+            }
+            automationScopePanel.revalidate();
+            automationScopePanel.repaint();
+        };
+
+        JPanel recoveryCodesPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        recoveryCodesPanel.add(new JLabel(text("Recovery trigger status codes:")));
+        recoveryCodesPanel.add(statusCodesField);
+        Runnable updateRecoveryOptions = () -> {
+            boolean visible = recoveryEnabledCheckBox.isSelected();
+            recoveryCodesPanel.setVisible(visible);
+            for (JCheckBox checkBox : recoveryToolChecks.values()) {
+                checkBox.setEnabled(visible);
+            }
+            recoveryCodesPanel.revalidate();
+        };
+        extractionEnabledCheckBox.addActionListener(e -> updateAutomationScope.run());
+        recoveryEnabledCheckBox.addActionListener(e -> {
+            updateRecoveryOptions.run();
+            updateAutomationScope.run();
+        });
+
+        JPanel automationSettingsPanel = new JPanel();
+        automationSettingsPanel.setLayout(new BoxLayout(automationSettingsPanel, BoxLayout.Y_AXIS));
+        JLabel extractionExplanationLabel = automationExplanationLabel(extractionExplanation);
+        JLabel recoveryExplanationLabel = automationExplanationLabel(recoveryExplanation);
+        extractionEnabledCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        extractionExplanationLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        recoveryEnabledCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        recoveryExplanationLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        recoveryCodesPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        automationScopePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        diagnosticCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        automationSettingsPanel.add(extractionEnabledCheckBox);
+        automationSettingsPanel.add(extractionExplanationLabel);
+        automationSettingsPanel.add(Box.createVerticalStrut(8));
+        automationSettingsPanel.add(recoveryEnabledCheckBox);
+        automationSettingsPanel.add(recoveryExplanationLabel);
+        automationSettingsPanel.add(recoveryCodesPanel);
+        automationSettingsPanel.add(Box.createVerticalStrut(8));
+        automationSettingsPanel.add(automationScopePanel);
+        automationSettingsPanel.add(Box.createVerticalStrut(8));
+        automationSettingsPanel.add(diagnosticCheckBox);
+        updateRecoveryOptions.run();
+        updateAutomationScope.run();
+
+        JTabbedPane settingsTabs = new JTabbedPane();
+        settingsTabs.addTab(text("General"), panel);
+        settingsTabs.addTab(text("Automation"), automationSettingsPanel);
 
         boolean enabled;
         String tag;
         while (true) {
-            int result = JOptionPane.showConfirmDialog(mainPanel, panel, text("Tool Configuration"),
+            int result = JOptionPane.showConfirmDialog(mainPanel, settingsTabs, text("Tool Configuration"),
                     JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
             if (result != JOptionPane.OK_OPTION) return;
 
@@ -986,6 +1135,9 @@ public final class VariableManager {
 
         placeholderTagEnabled = enabled;
         if (!tag.isEmpty()) placeholderTag = tag;
+        extractionEnabled = extractionEnabledCheckBox.isSelected();
+        sessionRecoveryEnabled = recoveryEnabledCheckBox.isSelected();
+        refreshStatusCodes = statusCodesField.getText().trim();
         extractionDebugEnabled = diagnosticCheckBox.isSelected();
         extractionTools = EnumSet.noneOf(AutomationTool.class);
         recoveryTools = EnumSet.noneOf(AutomationTool.class);
@@ -1001,8 +1153,16 @@ public final class VariableManager {
             createUI();
         } else {
             updatePlaceholderUsageLabel();
+            updateGlobalStatusLabels();
             tableModel.fireTableDataChanged();
         }
+    }
+
+    private JLabel automationExplanationLabel(String explanation) {
+        JLabel label = new JLabel(explanation);
+        label.setForeground(UIManager.getColor("Label.disabledForeground"));
+        label.setBorder(new EmptyBorder(0, 24, 0, 0));
+        return label;
     }
 
     private void updatePlaceholderUsageLabel() {
@@ -1018,19 +1178,21 @@ public final class VariableManager {
         }
     }
 
-    private void updateRecoveryControlsVisibility() {
-        boolean visible = globalRecoveryCheckBox != null && globalRecoveryCheckBox.isSelected();
-        if (refreshStatusCodesSeparator != null) refreshStatusCodesSeparator.setVisible(visible);
-        if (refreshStatusCodesLabel != null) refreshStatusCodesLabel.setVisible(visible);
-        if (refreshStatusCodesField != null) refreshStatusCodesField.setVisible(visible);
-        if (globalRecoveryCheckBox != null && globalRecoveryCheckBox.getParent() != null) {
-            globalRecoveryCheckBox.getParent().revalidate();
-            globalRecoveryCheckBox.getParent().repaint();
+    private void updateGlobalStatusLabels() {
+        if (automationStatusLabel != null) {
+            String extractionStatus = extractionEnabled ? text("On") : text("Off");
+            String recoveryStatus = sessionRecoveryEnabled ? text("On") : text("Off");
+            automationStatusLabel.setText(text("Extraction") + ": " + extractionStatus
+                    + "  ·  " + text("Recovery") + ": " + recoveryStatus);
+            automationStatusLabel.setToolTipText(text(
+                    "Open configuration to change automation behavior and tool scope."));
         }
     }
 
     private void updateDetailsPanel(int selectedRow) {
         if (selectedRow < 0) {
+            if (detailsCardLayout != null) detailsCardLayout.show(detailsCards, "empty");
+            setAdvancedMatchingExpanded(false);
             isUpdatingUI = true;
             valueTextArea.setText("");
             valueTextArea.setEnabled(false);
@@ -1063,6 +1225,7 @@ public final class VariableManager {
                     : text("Select a variable to edit its details."));
             return;
         }
+        if (detailsCardLayout != null) detailsCardLayout.show(detailsCards, "variable");
         String val = values.getOrDefault(name, "");
         VariableExtractionRule rule = rules.getOrDefault(name, new VariableExtractionRule());
 
@@ -1078,6 +1241,7 @@ public final class VariableManager {
         allowNonIdempotentReplayCheckBox.setSelected(rule.isAllowNonIdempotentReplay());
 
         boolean explicit = rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT;
+        setAdvancedMatchingExpanded(!explicit || rule.isAllowNonIdempotentReplay());
         matchStrategyLabel.setText(switch (rule.getMatchStrategy()) {
             case EXPLICIT -> text("Explicit filters");
             case LEGACY_EXACT -> text("Legacy exact saved request matching");
@@ -1142,6 +1306,17 @@ public final class VariableManager {
             }
         }
         isUpdatingUI = false;
+    }
+
+    private void setAdvancedMatchingExpanded(boolean expanded) {
+        if (advancedMatchToggle == null || advancedMatchPanel == null) return;
+        advancedMatchToggle.setSelected(expanded);
+        advancedMatchToggle.setText(text(expanded
+                ? "Hide advanced automation options"
+                : "Show advanced automation options"));
+        advancedMatchPanel.setVisible(expanded);
+        advancedMatchPanel.revalidate();
+        advancedMatchPanel.repaint();
     }
 
     private void clearRuleFields() {
@@ -1231,9 +1406,36 @@ public final class VariableManager {
                 checkBox.setSelected(false);
                 JOptionPane.showMessageDialog(mainPanel, text(error), text("Error"),
                         JOptionPane.ERROR_MESSAGE);
+            } else if (!ensureGlobalAutomationEnabled(mainPanel, refresh)) {
+                checkBox.setSelected(false);
             }
         }
         updateActiveRuleFromUI();
+    }
+
+    boolean ensureGlobalAutomationEnabled(Component parent, boolean refresh) {
+        boolean globallyEnabled = refresh ? sessionRecoveryEnabled : extractionEnabled;
+        if (globallyEnabled) return true;
+
+        String question = refresh
+                ? "Session recovery is disabled globally. Enable it now?"
+                : "Response extraction is disabled globally. Enable it now?";
+        String title = refresh
+                ? "Enable global session recovery"
+                : "Enable global response extraction";
+        int choice = JOptionPane.showConfirmDialog(
+                parent, text(question), text(title),
+                JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+        if (choice != JOptionPane.YES_OPTION) return false;
+
+        if (refresh) {
+            sessionRecoveryEnabled = true;
+        } else {
+            extractionEnabled = true;
+        }
+        savePreferences();
+        updateGlobalStatusLabels();
+        return true;
     }
 
     private String activeRuleValidationError(boolean refresh) {
@@ -1373,7 +1575,7 @@ public final class VariableManager {
 
         try {
             byte[] requestBytes = Base64.getDecoder().decode(rule.getSavedRequestBase64());
-            String rawReqText = new String(requestBytes, StandardCharsets.UTF_8);
+            HttpRequest savedRequest = HttpRequest.httpRequest(ByteArray.byteArray(requestBytes));
 
             JDialog editDialog = new JDialog(api.userInterface().swingUtils().suiteFrame(), text("Edit Saved Request - ") + name, Dialog.ModalityType.APPLICATION_MODAL);
             editDialog.setLayout(new BorderLayout(10, 10));
@@ -1405,12 +1607,13 @@ public final class VariableManager {
 
             editDialog.add(headerPanel, BorderLayout.NORTH);
 
-            // Editor panel
+            // Burp's native request editor provides Pretty, Raw and the other
+            // standard message views while remaining fully editable.
             JPanel editorPanel = new JPanel(new BorderLayout(5, 5));
             editorPanel.setBorder(new EmptyBorder(5, 10, 5, 10));
-            JTextArea requestEditor = new JTextArea(rawReqText);
-            requestEditor.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-            editorPanel.add(new JScrollPane(requestEditor), BorderLayout.CENTER);
+            HttpRequestEditor requestEditor = api.userInterface().createHttpRequestEditor();
+            requestEditor.setRequest(savedRequest);
+            editorPanel.add(requestEditor.uiComponent(), BorderLayout.CENTER);
             editDialog.add(editorPanel, BorderLayout.CENTER);
 
             // Footer buttons
@@ -1421,7 +1624,10 @@ public final class VariableManager {
 
             copyButton.addActionListener(e -> {
                 try {
-                    StringSelection selection = new StringSelection(requestEditor.getText());
+                    String requestText = new String(
+                            requestEditor.getRequest().toByteArray().getBytes(),
+                            StandardCharsets.UTF_8);
+                    StringSelection selection = new StringSelection(requestText);
                     Toolkit.getDefaultToolkit().getSystemClipboard().setContents(selection, selection);
                     JOptionPane.showMessageDialog(editDialog, text("Request copied to clipboard."), text("Copied"), JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception ex) {
@@ -1430,7 +1636,6 @@ public final class VariableManager {
             });
 
             saveButton.addActionListener(e -> {
-                String newRawReq = requestEditor.getText();
                 String newHost = hostField.getText().trim();
                 int newPort = 0;
                 try {
@@ -1446,15 +1651,17 @@ public final class VariableManager {
                     return;
                 }
 
+                HttpRequest editedRequest;
                 try {
-                    // Verify that it is parseable as HTTP request
-                    HttpRequest.httpRequest(ByteArray.byteArray(newRawReq.getBytes(StandardCharsets.UTF_8)));
+                    editedRequest = requestEditor.getRequest();
+                    if (editedRequest == null) throw new IllegalArgumentException("Empty request");
                 } catch (Exception ex) {
                     JOptionPane.showMessageDialog(editDialog, text("Failed to parse HTTP request. Please verify the format."), text("Error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
 
-                String newReqBase64 = Base64.getEncoder().encodeToString(newRawReq.getBytes(StandardCharsets.UTF_8));
+                String newReqBase64 = Base64.getEncoder().encodeToString(
+                        editedRequest.toByteArray().getBytes());
                 synchronized (lock) {
                     rule.setSavedRequestBase64(newReqBase64);
                     rule.setSavedHost(newHost);
@@ -1585,12 +1792,24 @@ public final class VariableManager {
         instrLabel.setBorder(new EmptyBorder(5, 5, 5, 5));
         selectorDialog.add(instrLabel, BorderLayout.NORTH);
 
-        // Editor
-        JTextArea responseEditor = new JTextArea(responseStr);
-        responseEditor.setEditable(false);
-        responseEditor.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        JScrollPane scrollPane = new JScrollPane(responseEditor);
-        selectorDialog.add(scrollPane, BorderLayout.CENTER);
+        boolean requestContent = rule.getSource() != null && rule.getSource().startsWith("request_");
+
+        // Use Burp's native message editor so users can switch between Pretty and Raw.
+        // The same dialog also supports request-based extraction rules.
+        Editor messageEditor;
+        byte[] messageBytes = responseStr.getBytes(StandardCharsets.UTF_8);
+        if (requestContent) {
+            HttpRequestEditor requestEditor = api.userInterface()
+                    .createHttpRequestEditor(EditorOptions.READ_ONLY);
+            requestEditor.setRequest(HttpRequest.httpRequest(ByteArray.byteArray(messageBytes)));
+            messageEditor = requestEditor;
+        } else {
+            HttpResponseEditor responseEditor = api.userInterface()
+                    .createHttpResponseEditor(EditorOptions.READ_ONLY);
+            responseEditor.setResponse(HttpResponse.httpResponse(ByteArray.byteArray(messageBytes)));
+            messageEditor = responseEditor;
+        }
+        selectorDialog.add(messageEditor.uiComponent(), BorderLayout.CENTER);
 
         // South Panel details & settings
         JPanel southPanel = new JPanel(new GridBagLayout());
@@ -1621,19 +1840,30 @@ public final class VariableManager {
         JComboBox<String> extractSrcCombo = new JComboBox<>(new String[]{
             text("Response Body"), text("Response Headers"), text("Request Body"), text("Request Headers")
         });
-        boolean requestContent = rule.getSource() != null && rule.getSource().startsWith("request_");
         if ("request_headers".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(3);
         else if ("request_body".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(2);
         else if ("headers".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(1);
         sgbc.gridx = 1; sgbc.weightx = 1.0;
         southPanel.add(extractSrcCombo, sgbc);
 
-        // Add selection listener to editor
-        responseEditor.addCaretListener(ce -> {
-            int start = Math.min(ce.getDot(), ce.getMark());
-            int end = Math.max(ce.getDot(), ce.getMark());
-            if (start != end && start >= 0 && end <= responseStr.length()) {
-                String selectedText = responseStr.substring(start, end);
+        // Native editors don't expose a caret listener, so poll their selection while
+        // this modal dialog is open. This works across both Pretty and Raw tabs.
+        String[] lastSelection = {""};
+        javax.swing.Timer selectionTimer = new javax.swing.Timer(150, event -> {
+            Optional<Selection> currentSelection = messageEditor.selection();
+            if (currentSelection.isPresent()) {
+                Selection selection = currentSelection.get();
+                String selectedText = new String(
+                        selection.contents().getBytes(), StandardCharsets.UTF_8);
+                int reportedStart = selection.offsets().startIndexInclusive();
+                int reportedEnd = selection.offsets().endIndexExclusive();
+                String signature = reportedStart + ":" + reportedEnd + ":" + selectedText;
+                if (selectedText.isEmpty() || signature.equals(lastSelection[0])) return;
+                lastSelection[0] = signature;
+
+                int start = locateSelection(responseStr, selectedText, reportedStart, reportedEnd);
+                if (start < 0) return;
+                int end = start + selectedText.length();
                 selectedValField.setText(selectedText);
 
                 // Analyze source (headers vs body)
@@ -1672,6 +1902,13 @@ public final class VariableManager {
                 } else {
                     extractSrcCombo.setSelectedIndex(0);
                 }
+            }
+        });
+        selectionTimer.start();
+        selectorDialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent event) {
+                selectionTimer.stop();
             }
         });
 
@@ -1723,6 +1960,35 @@ public final class VariableManager {
         selectorDialog.add(wrapperPanel, BorderLayout.SOUTH);
 
         selectorDialog.setVisible(true);
+        selectionTimer.stop();
+    }
+
+    private int locateSelection(String rawMessage, String selectedText,
+                                int reportedStart, int reportedEnd) {
+        if (reportedStart >= 0 && reportedEnd >= reportedStart
+                && reportedEnd <= rawMessage.length()
+                && rawMessage.substring(reportedStart, reportedEnd).equals(selectedText)) {
+            return reportedStart;
+        }
+
+        int firstMatch = rawMessage.indexOf(selectedText);
+        if (firstMatch < 0) return -1;
+
+        // Pretty views can change whitespace and therefore selection offsets. When
+        // the selected token occurs more than once, choose the occurrence nearest
+        // to the offset reported by Burp.
+        int bestMatch = firstMatch;
+        int bestDistance = Math.abs(firstMatch - Math.max(0, reportedStart));
+        int nextMatch = rawMessage.indexOf(selectedText, firstMatch + 1);
+        while (nextMatch >= 0) {
+            int distance = Math.abs(nextMatch - Math.max(0, reportedStart));
+            if (distance < bestDistance) {
+                bestMatch = nextMatch;
+                bestDistance = distance;
+            }
+            nextMatch = rawMessage.indexOf(selectedText, nextMatch + 1);
+        }
+        return bestMatch;
     }
 
     private String generateProposedRegex(String fullText, int start, int end) {
@@ -1923,6 +2189,7 @@ public final class VariableManager {
 
     public void savePreferences() {
         synchronized (lock) {
+            variableRevision++;
             try {
                 synchronizeDefinitionsFromRuntimeMaps();
                 api.persistence().preferences().setString(STATE_V3_KEY,
@@ -2073,11 +2340,14 @@ public final class VariableManager {
                 }
                 String recoveryEnabledPref = api.persistence().preferences().getString(
                         "dynamic_variables_session_recovery_enabled");
-                sessionRecoveryEnabled = recoveryEnabledPref != null
-                        && Boolean.parseBoolean(recoveryEnabledPref);
+                if (recoveryEnabledPref != null) {
+                    sessionRecoveryEnabled = Boolean.parseBoolean(recoveryEnabledPref);
+                }
                 String debugPref = api.persistence().preferences().getString(
                         "dynamic_variables_extraction_debug_enabled");
-                extractionDebugEnabled = debugPref != null && Boolean.parseBoolean(debugPref);
+                if (debugPref != null) {
+                    extractionDebugEnabled = Boolean.parseBoolean(debugPref);
+                }
                 String extractionToolsPref = api.persistence().preferences().getString(
                         "dynamic_variables_extraction_tools");
                 extractionTools = extractionToolsPref == null
@@ -2649,9 +2919,8 @@ public final class VariableManager {
                 if (row == null) return null;
                 if (row.folderRow) {
                     if (columnIndex != 0) return "";
-                    boolean expanded = row.ungrouped ? ungroupedExpanded : row.folder.isExpanded();
                     String name = row.ungrouped ? text("Ungrouped") : row.folder.getName();
-                    return (expanded ? "▾ " : "▸ ") + "📁 " + name + " (" +
+                    return name + " (" +
                             countVariablesInFolder(row.ungrouped ? null : row.folder.getId()) + ")";
                 }
                 String name = qualifiedName(row.variable);
@@ -2722,13 +2991,70 @@ public final class VariableManager {
             JLabel label = (JLabel) super.getTableCellRendererComponent(table, value, selected, focused, row, column);
             TableRow tableRow = tableModel.rowAt(row);
             label.setFont(label.getFont().deriveFont(tableRow != null && tableRow.folderRow ? Font.BOLD : Font.PLAIN));
-            if (tableRow != null && tableRow.variable != null) {
-                label.setText("    " + value);
+            if (tableRow != null && tableRow.folderRow) {
+                boolean expanded = tableRow.ungrouped
+                        ? ungroupedExpanded
+                        : tableRow.folder.isExpanded();
+                label.setIcon(new FolderRowIcon(expanded));
+                label.setIconTextGap(5);
+                label.setToolTipText(null);
+            } else if (tableRow != null && tableRow.variable != null) {
+                label.setIcon(null);
+                label.setText("      " + value);
                 label.setToolTipText(placeholderFor(qualifiedName(tableRow.variable)));
             } else {
+                label.setIcon(null);
                 label.setToolTipText(null);
             }
             return label;
+        }
+    }
+
+    private static final class FolderRowIcon implements Icon {
+        private static final int WIDTH = 29;
+        private static final int HEIGHT = 16;
+        private final boolean expanded;
+
+        private FolderRowIcon(boolean expanded) {
+            this.expanded = expanded;
+        }
+
+        @Override
+        public void paintIcon(Component component, Graphics graphics, int x, int y) {
+            Graphics2D g = (Graphics2D) graphics.create();
+            try {
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setColor(component.getForeground());
+
+                if (expanded) {
+                    g.fillPolygon(
+                            new int[]{x + 1, x + 9, x + 5},
+                            new int[]{y + 5, y + 5, y + 10},
+                            3);
+                } else {
+                    g.fillPolygon(
+                            new int[]{x + 3, x + 3, x + 8},
+                            new int[]{y + 3, y + 11, y + 7},
+                            3);
+                }
+
+                int folderX = x + 12;
+                g.fillRoundRect(folderX + 2, y + 2, 8, 5, 2, 2);
+                g.fillRoundRect(folderX, y + 5, 17, 10, 3, 3);
+            } finally {
+                g.dispose();
+            }
+        }
+
+        @Override
+        public int getIconWidth() {
+            return WIDTH;
+        }
+
+        @Override
+        public int getIconHeight() {
+            return HEIGHT;
         }
     }
 

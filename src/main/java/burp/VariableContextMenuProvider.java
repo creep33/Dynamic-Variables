@@ -13,6 +13,8 @@ import burp.api.montoya.ui.contextmenu.MessageEditorHttpRequestResponse;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -469,7 +471,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         Frame suiteFrame = api.userInterface().swingUtils().suiteFrame();
         JDialog dialog = new JDialog(suiteFrame, text("Assign to Variable"), Dialog.ModalityType.APPLICATION_MODAL);
         dialog.setLayout(new BorderLayout(10, 10));
-        dialog.setSize(520, 465);
+        dialog.setSize(720, 620);
         dialog.setLocationRelativeTo(suiteFrame);
 
         JPanel panel = new JPanel(new GridBagLayout());
@@ -484,13 +486,24 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         gbc.weightx = 0.0;
         panel.add(new JLabel(text("Folder:")), gbc);
 
-        List<String> folderNames = variableManager.getFolderNames();
+        List<String> folderNames = new ArrayList<>(variableManager.getFolderNames());
         JComboBox<String> folderComboBox = new JComboBox<>();
         folderComboBox.addItem(text("Ungrouped"));
         for (String folderName : folderNames) folderComboBox.addItem(folderName);
+        folderComboBox.setEditable(true);
+        folderComboBox.setToolTipText(text("Search or create a folder"));
+        JButton createFolderButton = new JButton(text("Create folder"));
+        createFolderButton.setEnabled(false);
+        JLabel folderHint = new JLabel(text(
+                "Type to filter folders. If the name does not exist, create it here."));
+        folderHint.setForeground(UIManager.getColor("Label.disabledForeground"));
+        JPanel folderInputPanel = new JPanel(new BorderLayout(6, 2));
+        folderInputPanel.add(folderComboBox, BorderLayout.CENTER);
+        folderInputPanel.add(createFolderButton, BorderLayout.EAST);
+        folderInputPanel.add(folderHint, BorderLayout.SOUTH);
         gbc.gridx = 1;
         gbc.weightx = 1.0;
-        panel.add(folderComboBox, gbc);
+        panel.add(folderInputPanel, gbc);
 
         // Row 1: Variable Name (Editable ComboBox)
         gbc.gridy = 1;
@@ -508,13 +521,110 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         gbc.weightx = 1.0;
         panel.add(nameComboBox, gbc);
 
-        folderComboBox.addActionListener(e -> {
+        boolean[] updatingFolderSuggestions = {false};
+        Runnable reloadVariableNames = () -> {
+            if (updatingFolderSuggestions[0]) return;
+            String folder = existingFolderName(
+                    folderNames, folderEditorText(folderComboBox), text("Ungrouped"));
+            if (folder == null) return;
             Object editorValue = nameComboBox.getEditor().getItem();
-            String folder = folderComboBox.getSelectedIndex() == 0 ? "" : folderComboBox.getSelectedItem().toString();
             nameComboBox.removeAllItems();
             for (String variable : variableManager.getVariableNamesInFolder(folder)) nameComboBox.addItem(variable);
             if (nameComboBox.getItemCount() > 0) nameComboBox.setSelectedIndex(0);
             else if (editorValue != null) nameComboBox.getEditor().setItem(editorValue);
+        };
+        Runnable updateCreateFolderButton = () -> {
+            String candidate = folderEditorText(folderComboBox);
+            boolean existing = existingFolderName(
+                    folderNames, candidate, text("Ungrouped")) != null;
+            createFolderButton.setEnabled(
+                    !candidate.isEmpty() && !existing && VariableNames.isValidComponent(candidate));
+        };
+        Runnable filterFolderSuggestions = () -> {
+            if (updatingFolderSuggestions[0]) return;
+            String query = folderEditorText(folderComboBox);
+            SwingUtilities.invokeLater(() -> {
+                if (updatingFolderSuggestions[0]) return;
+                updatingFolderSuggestions[0] = true;
+                try {
+                    DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
+                    for (String suggestion : filterFolderNames(
+                            folderNames, query, text("Ungrouped"))) {
+                        model.addElement(suggestion);
+                    }
+                    folderComboBox.setModel(model);
+                    folderComboBox.setSelectedItem(query);
+                    Component editor = folderComboBox.getEditor().getEditorComponent();
+                    if (editor instanceof JTextField field) {
+                        field.setText(query);
+                        field.setCaretPosition(query.length());
+                    }
+                    updateCreateFolderButton.run();
+                    if (!query.isEmpty() && model.getSize() > 0
+                            && folderComboBox.isShowing()
+                            && editor.isFocusOwner()) {
+                        folderComboBox.showPopup();
+                    }
+                } finally {
+                    updatingFolderSuggestions[0] = false;
+                }
+            });
+        };
+        Component folderEditor = folderComboBox.getEditor().getEditorComponent();
+        if (folderEditor instanceof JTextField folderTextField) {
+            folderTextField.getDocument().addDocumentListener(new DocumentListener() {
+                @Override
+                public void insertUpdate(DocumentEvent event) {
+                    filterFolderSuggestions.run();
+                }
+
+                @Override
+                public void removeUpdate(DocumentEvent event) {
+                    filterFolderSuggestions.run();
+                }
+
+                @Override
+                public void changedUpdate(DocumentEvent event) {
+                    filterFolderSuggestions.run();
+                }
+            });
+        }
+        folderComboBox.addActionListener(e -> {
+            reloadVariableNames.run();
+            updateCreateFolderButton.run();
+        });
+        createFolderButton.addActionListener(e -> {
+            String candidate = folderEditorText(folderComboBox);
+            if (!VariableNames.isValidComponent(candidate)) {
+                JOptionPane.showMessageDialog(dialog,
+                        text("Folder") + text(" names cannot contain '.'."),
+                        text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            try {
+                variableManager.createFolder(candidate);
+                folderNames.add(candidate);
+                updatingFolderSuggestions[0] = true;
+                try {
+                    folderComboBox.setModel(new DefaultComboBoxModel<>(
+                            filterFolderNames(folderNames, candidate, text("Ungrouped"))
+                                    .toArray(new String[0])));
+                    folderComboBox.setSelectedItem(candidate);
+                    folderComboBox.getEditor().setItem(candidate);
+                } finally {
+                    updatingFolderSuggestions[0] = false;
+                }
+                updateCreateFolderButton.run();
+                reloadVariableNames.run();
+            } catch (IllegalStateException duplicate) {
+                JOptionPane.showMessageDialog(dialog,
+                        text("A folder with this name already exists."),
+                        text("Duplicate Folder"), JOptionPane.ERROR_MESSAGE);
+            } catch (IllegalArgumentException invalid) {
+                JOptionPane.showMessageDialog(dialog,
+                        text("Folder") + text(" names cannot contain '.'."),
+                        text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+            }
         });
 
         // Row 2: Selected Value (Read-only scrollpane)
@@ -584,6 +694,66 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         JCheckBox saveRequestCheckBox = new JCheckBox(text("Save this request to refresh token in the future"), true);
         panel.add(saveRequestCheckBox, gbc);
 
+        // Row 7: Initial automation state for the variable
+        gbc.gridy = 7;
+        JPanel automationPanel = new JPanel();
+        automationPanel.setLayout(new BoxLayout(automationPanel, BoxLayout.Y_AXIS));
+        automationPanel.setBorder(BorderFactory.createTitledBorder(text("Variable automation")));
+
+        JCheckBox passiveExtractionCheckBox = new JCheckBox(
+                text("Update this variable from matching responses"), false);
+        passiveExtractionCheckBox.setToolTipText(text(
+                "Requires global response extraction and extraction for the current Burp tool to be enabled."));
+        automationPanel.add(passiveExtractionCheckBox);
+        automationPanel.add(secondaryLabel(text(
+                "Matching responses update the value passively; no request is retried.")));
+        automationPanel.add(Box.createVerticalStrut(6));
+
+        JCheckBox sessionRecoveryCheckBox = new JCheckBox(
+                text("Use this variable for expired-session recovery"), false);
+        sessionRecoveryCheckBox.setToolTipText(text(
+                "Requires global session recovery, recovery for the current Burp tool, and a saved refresh request."));
+        automationPanel.add(sessionRecoveryCheckBox);
+        automationPanel.add(secondaryLabel(text(
+                "After a configured status, the saved request obtains a new value and the original request is retried.")));
+        panel.add(automationPanel, gbc);
+
+        passiveExtractionCheckBox.addActionListener(e -> {
+            if (passiveExtractionCheckBox.isSelected()
+                    && !variableManager.ensureGlobalAutomationEnabled(dialog, false)) {
+                passiveExtractionCheckBox.setSelected(false);
+            }
+        });
+        sessionRecoveryCheckBox.addActionListener(e -> {
+            if (sessionRecoveryCheckBox.isSelected()
+                    && !variableManager.ensureGlobalAutomationEnabled(dialog, true)) {
+                sessionRecoveryCheckBox.setSelected(false);
+            }
+        });
+        saveRequestCheckBox.addActionListener(e -> {
+            boolean requestSaved = saveRequestCheckBox.isSelected();
+            sessionRecoveryCheckBox.setEnabled(requestSaved);
+            if (!requestSaved) sessionRecoveryCheckBox.setSelected(false);
+        });
+        Runnable loadExistingAutomationState = () -> {
+            Object selectedVariable = nameComboBox.getEditor().getItem();
+            if (selectedVariable == null) return;
+            String localName = selectedVariable.toString().trim();
+            String selectedFolder = existingFolderName(
+                    folderNames, folderEditorText(folderComboBox), text("Ungrouped"));
+            VariableExtractionRule existingRule = selectedFolder == null ? null
+                    : variableManager.getRules().get(
+                            variableManager.qualifyVariableName(selectedFolder, localName));
+            passiveExtractionCheckBox.setSelected(existingRule != null && existingRule.isEnabled());
+            sessionRecoveryCheckBox.setSelected(existingRule != null
+                    && existingRule.isAutomaticRefreshEnabled()
+                    && saveRequestCheckBox.isSelected());
+        };
+        nameComboBox.addActionListener(e -> loadExistingAutomationState.run());
+        folderComboBox.addActionListener(e ->
+                SwingUtilities.invokeLater(loadExistingAutomationState));
+        loadExistingAutomationState.run();
+
         gbc.gridwidth = 1;
 
         // Row 6: Action Buttons
@@ -592,7 +762,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         JButton cancelButton = new JButton(text("Cancel"));
 
         saveButton.addActionListener(al -> {
-            Object selectedItem = nameComboBox.getSelectedItem();
+            Object selectedItem = nameComboBox.getEditor().getItem();
             if (selectedItem == null || selectedItem.toString().trim().isEmpty()) {
                 JOptionPane.showMessageDialog(dialog, text("Please select or type a variable name."), text("Error"), JOptionPane.ERROR_MESSAGE);
                 return;
@@ -602,7 +772,17 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 JOptionPane.showMessageDialog(dialog, text("Variable names cannot contain '.'. Choose the folder separately."), text("Error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
-            String folderName = folderComboBox.getSelectedIndex() == 0 ? "" : folderComboBox.getSelectedItem().toString();
+            String folderInput = folderEditorText(folderComboBox);
+            String folderName = existingFolderName(
+                    folderNames, folderInput, text("Ungrouped"));
+            if (folderName == null) {
+                if (!VariableNames.isValidComponent(folderInput)) {
+                    JOptionPane.showMessageDialog(dialog,
+                            text("Folder") + text(" names cannot contain '.'."),
+                            text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            }
             String pathFilter = pathField.getText().trim();
             String chosenSource;
             switch (sourceComboBox.getSelectedIndex()) {
@@ -620,6 +800,57 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 return;
             }
 
+            if (folderName == null) {
+                int create = JOptionPane.showConfirmDialog(
+                        dialog, text("The folder does not exist. Create it now?"),
+                        text("Create folder"), JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE);
+                if (create != JOptionPane.YES_OPTION) return;
+                try {
+                    variableManager.createFolder(folderInput);
+                    folderNames.add(folderInput);
+                    folderName = folderInput;
+                } catch (IllegalStateException duplicate) {
+                    folderName = existingFolderName(
+                            variableManager.getFolderNames(), folderInput, text("Ungrouped"));
+                    if (folderName == null) return;
+                } catch (IllegalArgumentException invalid) {
+                    JOptionPane.showMessageDialog(dialog,
+                            text("Folder") + text(" names cannot contain '.'."),
+                            text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            }
+
+            String qualifiedName = variableManager.qualifyVariableName(folderName, varName);
+            if (variableManager.getVariables().containsKey(qualifiedName)) {
+                Object[] options = {
+                        text("Update existing variable"),
+                        text("Create with another name"),
+                        text("Cancel")
+                };
+                int choice = JOptionPane.showOptionDialog(
+                        dialog,
+                        String.format(text(
+                                "The variable \"%s\" already exists in this folder. Updating will replace its current value and automation rule."),
+                                varName),
+                        text("Variable already exists"),
+                        JOptionPane.DEFAULT_OPTION,
+                        JOptionPane.WARNING_MESSAGE,
+                        null,
+                        options,
+                        options[1]);
+                if (choice == 1) {
+                    String alternativeName = requestAlternativeVariableName(
+                            dialog, folderName, varName);
+                    if (alternativeName == null) return;
+                    varName = alternativeName;
+                    nameComboBox.getEditor().setItem(varName);
+                } else if (choice != 0) {
+                    return;
+                }
+            }
+
             String reqBase64 = "";
             String host = requestResponse.request().httpService().host();
             int port = requestResponse.request().httpService().port();
@@ -635,7 +866,8 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                     folderName,
                     varName,
                     selectedText, 
-                    false,
+                    passiveExtractionCheckBox.isSelected(),
+                    sessionRecoveryCheckBox.isSelected(),
                     pathFilter, 
                     chosenSource, 
                     regexPattern,
@@ -656,6 +888,87 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         dialog.add(panel, BorderLayout.CENTER);
         dialog.add(buttonPanel, BorderLayout.SOUTH);
         dialog.setVisible(true);
+    }
+
+    private String requestAlternativeVariableName(Component parent, String folderName, String originalName) {
+        String suggestion = nextAvailableVariableName(folderName, originalName);
+        while (true) {
+            Object entered = JOptionPane.showInputDialog(
+                    parent,
+                    text("New variable name:"),
+                    text("Create new variable"),
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    null,
+                    suggestion);
+            if (entered == null) return null;
+            String candidate = entered.toString().trim();
+            if (!VariableNames.isValidComponent(candidate)) {
+                JOptionPane.showMessageDialog(parent,
+                        text("Variable names cannot contain '.'. Choose the folder separately."),
+                        text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+                suggestion = candidate;
+                continue;
+            }
+            String qualified = variableManager.qualifyVariableName(folderName, candidate);
+            if (variableManager.getVariables().containsKey(qualified)) {
+                JOptionPane.showMessageDialog(parent,
+                        text("Variable '") + qualified + text("' already exists."),
+                        text("Duplicate Variable"), JOptionPane.ERROR_MESSAGE);
+                suggestion = nextAvailableVariableName(folderName, candidate);
+                continue;
+            }
+            return candidate;
+        }
+    }
+
+    private String nextAvailableVariableName(String folderName, String originalName) {
+        Map<String, String> variables = variableManager.getVariables();
+        int suffix = 2;
+        String candidate;
+        do {
+            candidate = originalName + "_" + suffix++;
+        } while (variables.containsKey(variableManager.qualifyVariableName(folderName, candidate)));
+        return candidate;
+    }
+
+    private JLabel secondaryLabel(String value) {
+        JLabel label = new JLabel(value);
+        label.setForeground(UIManager.getColor("Label.disabledForeground"));
+        label.setBorder(new EmptyBorder(0, 24, 0, 0));
+        return label;
+    }
+
+    static List<String> filterFolderNames(List<String> folderNames, String query, String ungroupedLabel) {
+        String normalizedQuery = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
+        List<String> matches = new ArrayList<>();
+        if (ungroupedLabel.toLowerCase(java.util.Locale.ROOT).contains(normalizedQuery)) {
+            matches.add(ungroupedLabel);
+        }
+        if (folderNames != null) {
+            for (String folderName : folderNames) {
+                if (folderName != null
+                        && folderName.toLowerCase(java.util.Locale.ROOT).contains(normalizedQuery)) {
+                    matches.add(folderName);
+                }
+            }
+        }
+        return matches;
+    }
+
+    static String existingFolderName(List<String> folderNames, String input, String ungroupedLabel) {
+        String normalized = input == null ? "" : input.trim();
+        if (normalized.isEmpty() || normalized.equalsIgnoreCase(ungroupedLabel)) return "";
+        if (folderNames == null) return null;
+        return folderNames.stream()
+                .filter(folder -> folder.equalsIgnoreCase(normalized))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private String folderEditorText(JComboBox<String> folderComboBox) {
+        Object editorValue = folderComboBox.getEditor().getItem();
+        return editorValue == null ? "" : editorValue.toString().trim();
     }
 
     private String generateProposedRegex(String fullText, int start, int end) {

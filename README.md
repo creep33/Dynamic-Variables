@@ -30,7 +30,7 @@ Dynamic Variables is a Burp Suite extension that brings template variables and a
 | 3 | **Variables Dashboard** | A centralized tab in Burp Suite to manage variable values, auto-extraction rules, and background request execution. Includes independent toggles to enable/disable substitution in Repeater, Intruder, Scanner, and Proxy. |
 | 4 | **Request Auto-Refreshing** | Saves the request template that generated your token (e.g., login or auth endpoint). Re-sends it instantly in a background thread from the tab to fetch a fresh token. |
 | 5 | **Recursive Injection** | If your saved refresh request itself depends on other variables (like credentials or client keys), they are substituted automatically before launching the request. |
-| 6 | **Opt-in Session Recovery** | When explicitly enabled, a request containing variables that receives HTTP `401` or `403` can run an authorized refresh and retry. Safe methods are allowed by default; other methods require an additional per-variable permission. |
+| 6 | **Per-variable Session Recovery** | Recovery is available by default in Repeater, but each variable must explicitly opt in and have a saved refresh request. Safe methods are allowed by default; other methods require an additional per-variable permission. |
 | 7 | **Interactive Rule Editor** | Click *Update Rule from Response...* to run the saved request and highlight the new token value directly in a raw HTTP response editor to auto-update the regex rule. |
 | 8 | **Repeater Integration** | Send your saved login/refresh requests directly to the Repeater tab for manual tweaking and testing. |
 | 9 | **Request Editor Sub-Tab** | Adds a custom request editor tab next to Raw/Hex to display a sidebar listing all defined variables. Double-click any variable to insert a placeholder using the active syntax. |
@@ -93,11 +93,11 @@ With the tag `dv`, use `{{dv:token}}` or `{{dv:alice.token}}`. Only placeholders
 2. Go to the **Response** viewer tab.
 3. Highlight the token value inside the response body or headers.
 4. Right-click the highlighted text and click **Assign to Variable...**.
-5. Choose **Ungrouped** or a folder, then select or type a variable name. The **Regex Pattern** is automatically generated for you.
-6. Make sure **"Save this request to refresh token in the future"** is checked.
-7. Click **Save Rule**.
-8. Review the explicit method, service, path, optional query, and request discriminator in the dashboard.
-9. Enable **Enable auto-extraction for this variable** only after confirming that the rule is scoped to the intended pentest identity. New rules are deliberately disabled by default.
+5. Search for a folder by typing in the folder field. Select an existing match, keep **Ungrouped**, or create the entered folder without leaving the dialog.
+6. Select or type a variable name. The **Regex Pattern** is automatically generated for you. If the variable already exists in that folder, choose whether to update it or create a new variable under another name.
+7. Keep **Save this request to refresh token in the future** checked if the variable will participate in session recovery.
+8. Choose whether to enable passive extraction and expired-session recovery for the variable. Both remain disabled unless selected explicitly.
+9. Click **Save Rule**, then review the explicit method, service, path, optional query, and request discriminator in the dashboard.
 
 ### 3. Using the Dynamic Variables Request Tab
 1. Open the **Repeater** tab.
@@ -143,13 +143,13 @@ This makes it quick and less error-prone to repeat the same request as another u
 This modifies the template currently open in Repeater. Once a placeholder has been replaced with text, later updates to that variable no longer affect this request. Duplicate the Repeater tab first or use Repeater's undo support if you may need the original template again.
 
 ### 6. Transparent 401/403 Session Recovery
-Recovery is disabled by default, including after migration from an earlier release.
+Global recovery is enabled by default only for Repeater. It remains inactive for a variable until that variable explicitly opts in and has a saved refresh request. Stored preferences from an earlier release are preserved.
 
 1. In **Configuration...**, explicitly enable session recovery for the required Burp tools. Repeater is the only preselected tool scope.
 2. Enable **Enable automatic session recovery (401/403)** globally.
-3. Select the variable and enable **Enable automatic refresh for this variable**.
+3. Select the variable and enable **Use this variable for expired-session recovery**.
 4. Requests using `GET`, `HEAD`, or `OPTIONS` can now be refreshed and retried after a configured status code.
-5. To replay any other method, additionally enable **Allow replay of non-idempotent requests** for every variable being refreshed.
+5. To replay any other method, additionally enable **In session recovery, allow retrying non-idempotent requests** for every variable being refreshed.
 
 Refresh values are staged and committed together. If any refresh fails, the original 401/403 is preserved and no partial values are stored. A successful retry is returned with a Burp annotation recording the original and final status codes. The extension never logs token values, cookies, credentials, or message bodies.
 

@@ -30,7 +30,7 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 | 3 | **Panel de variables** | Una pestaña centralizada en Burp Suite para administrar valores, reglas de extracción automática y ejecución de peticiones en segundo plano. Incluye controles independientes para activar o desactivar la sustitución en Repeater, Intruder, Scanner y Proxy. |
 | 4 | **Actualización automática de peticiones** | Guarda la plantilla de la petición que generó el token, como un endpoint de login o autenticación. La vuelve a enviar inmediatamente desde la pestaña y en segundo plano para obtener un token nuevo. |
 | 5 | **Inyección recursiva** | Si la petición de actualización guardada depende de otras variables, como credenciales o claves de cliente, estas se sustituyen automáticamente antes de enviar la petición. |
-| 6 | **Recuperación de sesión opt-in** | Cuando se activa explícitamente, una petición con variables que recibe HTTP `401` o `403` puede ejecutar una actualización autorizada y reenviarse. Los métodos seguros se permiten por defecto; el resto requiere un permiso adicional por variable. |
+| 6 | **Recuperación de sesión por variable** | La recuperación está disponible por defecto en Repeater, pero cada variable debe activarla explícitamente y tener una petición de actualización guardada. Los métodos seguros se permiten por defecto; el resto requiere un permiso adicional por variable. |
 | 7 | **Editor interactivo de reglas** | Pulsa *Actualizar regla desde respuesta...* para ejecutar la petición guardada y seleccionar el nuevo valor del token directamente en un editor de respuesta HTTP sin procesar. La regla regex se actualiza automáticamente. |
 | 8 | **Integración con Repeater** | Envía las peticiones guardadas de login o actualización directamente a una pestaña de Repeater para modificarlas y probarlas manualmente. |
 | 9 | **Subpestaña del editor de peticiones** | Añade una pestaña personalizada junto a Raw/Hex con una barra lateral que muestra todas las variables definidas. Haz doble clic en una variable para insertar un placeholder con la sintaxis activa. |
@@ -95,11 +95,11 @@ Con la etiqueta `dv`, utiliza `{{dv:token}}` o `{{dv:alice.token}}`. Solo se sus
 2. Abre la pestaña **Response** del visor.
 3. Selecciona el valor del token en el cuerpo o las cabeceras de la respuesta.
 4. Haz clic derecho sobre el texto seleccionado y pulsa **Asignar a variable...**.
-5. Elige **Sin carpeta** o una carpeta y selecciona o escribe el nombre de la variable. El **Patrón regex** se genera automáticamente.
-6. Comprueba que esté marcada la opción **Guardar esta petición para actualizar el token en el futuro**.
-7. Pulsa **Guardar regla**.
-8. Revisa en el panel el método, servicio, ruta, query opcional y discriminador de petición explícitos.
-9. Activa **Activar extracción automática para esta variable** únicamente después de confirmar que la regla está limitada a la identidad de pentest correcta. Las reglas nuevas se guardan desactivadas de forma deliberada.
+5. Busca una carpeta escribiendo en el campo. Selecciona una coincidencia existente, conserva **Sin carpeta** o crea la carpeta introducida sin salir del diálogo.
+6. Selecciona o escribe el nombre de la variable. El **Patrón regex** se genera automáticamente. Si la variable ya existe en esa carpeta, elige si quieres actualizarla o crear otra con un nombre diferente.
+7. Mantén marcada **Guardar esta petición para actualizar el token en el futuro** si la variable participará en la recuperación de sesión.
+8. Elige si quieres activar la extracción pasiva y la recuperación de sesiones caducadas para la variable. Ambas permanecen desactivadas si no se seleccionan explícitamente.
+9. Pulsa **Guardar regla** y revisa en el panel el método, servicio, ruta, query opcional y discriminador de petición explícitos.
 
 ### 3. Utilizar la pestaña Dynamic Variables del editor de peticiones
 
@@ -151,13 +151,13 @@ Esta acción modifica la plantilla abierta en Repeater. Cuando un placeholder se
 
 ### 6. Recuperación transparente de sesiones 401/403
 
-La recuperación está desactivada por defecto, también después de migrar desde una versión anterior.
+La recuperación global está activada por defecto solo para Repeater. No actúa sobre una variable hasta que esta la active explícitamente y tenga una petición de actualización guardada. Las preferencias almacenadas de versiones anteriores se conservan.
 
 1. En **Configuración...**, activa explícitamente la recuperación para las herramientas de Burp necesarias. Repeater es el único ámbito preseleccionado.
 2. Activa globalmente **Activar recuperación automática de sesión (401/403)**.
-3. Selecciona la variable y activa **Activar actualización automática para esta variable**.
+3. Selecciona la variable y activa **Usar esta variable para recuperar sesiones caducadas**.
 4. Las peticiones `GET`, `HEAD` y `OPTIONS` podrán actualizarse y reenviarse después de uno de los códigos configurados.
-5. Para reenviar cualquier otro método, activa además **Permitir reenvío de peticiones no idempotentes** en todas las variables que vayan a actualizarse.
+5. Para reenviar cualquier otro método, activa además **En la recuperación de sesión, permitir reintentar peticiones no idempotentes** en todas las variables que vayan a actualizarse.
 
 Los valores actualizados se preparan y confirman conjuntamente. Si falla cualquiera de las actualizaciones, se conserva el 401/403 original y no se guarda ningún valor parcial. Un reintento correcto se devuelve con una anotación de Burp que indica los códigos de estado original y final. La extensión nunca escribe en los logs tokens, cookies, credenciales ni cuerpos de mensajes.
 
