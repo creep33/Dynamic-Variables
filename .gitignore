@@ -29,5 +29,4 @@ build/
 bin/
 
 # Other files
-dev/
 .DS_Store
