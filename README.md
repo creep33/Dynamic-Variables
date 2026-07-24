@@ -18,6 +18,7 @@ Dynamic Variables is a Burp Suite extension that brings template variables and a
 - [Running the Test Suite](#running-the-test-suite)
 - [Dependencies](#dependencies)
 - [Contributing](#contributing)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 
 ---
@@ -261,6 +262,12 @@ We welcome contributions from human developers and AI assistants alike! Before m
 3. **Burp Networking**: Use Montoya's `api.http().issueHttpRequest(...)` for all external HTTP communications to honor Burp upstream proxies and session rules.
 4. **Parent Containers for UI Dialogs**: Always specify `api.userInterface().swingUtils().suiteFrame()` as the parent window for modal dialogs or popups (`JDialog`, `JOptionPane`).
 5. **Clean Environment**: Do not commit local file system paths or confidential environment data.
+
+---
+
+## Acknowledgements
+
+Thanks to [Mario Mansilla (@creep33)](https://github.com/creep33) for reporting the bug that caused the session refresh request to run even when the refresh option was disabled, and for suggesting the use of the *Pretty* format instead of *Raw* in some request dialogs.
 
 ---
 

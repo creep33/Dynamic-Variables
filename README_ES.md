@@ -18,6 +18,7 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 - [Ejecución de las pruebas](#ejecución-de-las-pruebas)
 - [Dependencias](#dependencias)
 - [Cómo colaborar](#cómo-colaborar)
+- [Agradecimientos](#agradecimientos)
 - [Licencia](#licencia)
 
 ---
@@ -272,6 +273,12 @@ Una ejecución correcta termina con `BUILD SUCCESSFUL`. Gradle escribe el inform
 3. **Red de Burp**: Utiliza `api.http().issueHttpRequest(...)` de Montoya para todas las comunicaciones HTTP externas a fin de respetar los proxys y reglas de sesión de Burp Suite.
 4. **Contenedor Padre para Diálogos**: Especifica siempre `api.userInterface().swingUtils().suiteFrame()` como ventana contenedora padre para diálogos modales o popups (`JDialog`, `JOptionPane`).
 5. **Entorno Limpio**: No incluyas rutas locales del sistema de archivos ni información confidencial en el código ni en la documentación.
+
+---
+
+## Agradecimientos
+
+Gracias a [Mario Mansilla (@creep33)](https://github.com/creep33) por reportar el bug que provocaba que la petición de actualización de la sesión se ejecutara aunque la opción de refresco estuviera deshabilitada, y por sugerir el uso del formato *Pretty* en lugar de *Raw* en algunos cuadros de peticiones.
 
 ---
 
