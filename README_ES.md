@@ -30,7 +30,7 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 | 3 | **Panel de variables** | Una pestaña centralizada en Burp Suite para administrar valores, reglas de extracción automática y ejecución de peticiones en segundo plano. Incluye controles independientes para activar o desactivar la sustitución en Repeater, Intruder, Scanner y Proxy. |
 | 4 | **Actualización automática de peticiones** | Guarda la plantilla de la petición que generó el token, como un endpoint de login o autenticación. La vuelve a enviar inmediatamente desde la pestaña y en segundo plano para obtener un token nuevo. |
 | 5 | **Inyección recursiva** | Si la petición de actualización guardada depende de otras variables, como credenciales o claves de cliente, estas se sustituyen automáticamente antes de enviar la petición. |
-| 6 | **Recuperación transparente de sesión** | Cuando una petición con variables recibe una respuesta HTTP `401 Unauthorized` o `403 Forbidden`, la extensión pausa la transacción, ejecuta la petición de actualización, actualiza la variable y reenvía la petición original con el token nuevo. |
+| 6 | **Recuperación de sesión opt-in** | Cuando se activa explícitamente, una petición con variables que recibe HTTP `401` o `403` puede ejecutar una actualización autorizada y reenviarse. Los métodos seguros se permiten por defecto; el resto requiere un permiso adicional por variable. |
 | 7 | **Editor interactivo de reglas** | Pulsa *Actualizar regla desde respuesta...* para ejecutar la petición guardada y seleccionar el nuevo valor del token directamente en un editor de respuesta HTTP sin procesar. La regla regex se actualiza automáticamente. |
 | 8 | **Integración con Repeater** | Envía las peticiones guardadas de login o actualización directamente a una pestaña de Repeater para modificarlas y probarlas manualmente. |
 | 9 | **Subpestaña del editor de peticiones** | Añade una pestaña personalizada junto a Raw/Hex con una barra lateral que muestra todas las variables definidas. Haz doble clic en una variable para insertar un placeholder con la sintaxis activa. |
@@ -98,6 +98,8 @@ Con la etiqueta `dv`, utiliza `{{dv:token}}` o `{{dv:alice.token}}`. Solo se sus
 5. Elige **Sin carpeta** o una carpeta y selecciona o escribe el nombre de la variable. El **Patrón regex** se genera automáticamente.
 6. Comprueba que esté marcada la opción **Guardar esta petición para actualizar el token en el futuro**.
 7. Pulsa **Guardar regla**.
+8. Revisa en el panel el método, servicio, ruta, query opcional y discriminador de petición explícitos.
+9. Activa **Activar extracción automática para esta variable** únicamente después de confirmar que la regla está limitada a la identidad de pentest correcta. Las reglas nuevas se guardan desactivadas de forma deliberada.
 
 ### 3. Utilizar la pestaña Dynamic Variables del editor de peticiones
 
@@ -149,14 +151,17 @@ Esta acción modifica la plantilla abierta en Repeater. Cuando un placeholder se
 
 ### 6. Recuperación transparente de sesiones 401/403
 
-1. Utiliza una variable mediante placeholder, por ejemplo `{{jwt}}`, en cualquier petición de Repeater, Intruder o Scanner.
-2. Si la sesión caduca y el servidor devuelve un estado HTTP 401 o 403:
+La recuperación está desactivada por defecto, también después de migrar desde una versión anterior.
 
-   - La extensión intercepta la respuesta antes de mostrarla.
-   - Ejecuta de forma síncrona la petición de login guardada, actualiza el valor de `jwt` e inyecta el token nuevo.
-   - Reenvía la petición al servidor de destino y muestra la respuesta correcta de forma transparente.
+1. En **Configuración...**, activa explícitamente la recuperación para las herramientas de Burp necesarias. Repeater es el único ámbito preseleccionado.
+2. Activa globalmente **Activar recuperación automática de sesión (401/403)**.
+3. Selecciona la variable y activa **Activar actualización automática para esta variable**.
+4. Las peticiones `GET`, `HEAD` y `OPTIONS` podrán actualizarse y reenviarse después de uno de los códigos configurados.
+5. Para reenviar cualquier otro método, activa además **Permitir reenvío de peticiones no idempotentes** en todas las variables que vayan a actualizarse.
 
-3. No necesitas copiar, pegar ni pulsar nada manualmente: la petición recupera la sesión por sí sola.
+Los valores actualizados se preparan y confirman conjuntamente. Si falla cualquiera de las actualizaciones, se conserva el 401/403 original y no se guarda ningún valor parcial. Un reintento correcto se devuelve con una anotación de Burp que indica los códigos de estado original y final. La extensión nunca escribe en los logs tokens, cookies, credenciales ni cuerpos de mensajes.
+
+La extracción pasiva y la recuperación tienen ámbitos de herramientas independientes. Las reglas de carpetas distintas representan identidades de pentest diferentes; si más de una carpeta coincide con una petición, la extracción se detiene de forma segura. Dentro de una carpeta pueden actualizarse conjuntamente varios valores, como access y refresh tokens. Si hay peticiones concurrentes para la misma regla, sólo puede actualizarla la respuesta de la petición enviada más recientemente.
 
 ### 7. Actualización interactiva de reglas
 
@@ -197,7 +202,7 @@ gradle build
 El JAR se generará en:
 
 ```text
-build/libs/dynamic-variables-1.0.2.jar
+build/libs/dynamic-variables-1.1.0.jar
 ```
 
 ### Cargar la extensión en Burp Suite
@@ -206,7 +211,7 @@ build/libs/dynamic-variables-1.0.2.jar
 2. Ve a **Extensions** → **Installed**.
 3. Pulsa **Add**.
 4. Selecciona `Java` como **Extension type**.
-5. Selecciona el archivo compilado `dynamic-variables-1.0.2.jar` y pulsa **Next**.
+5. Selecciona el archivo compilado `dynamic-variables-1.1.0.jar` y pulsa **Next**.
 
 ## Ejecución de las pruebas
 

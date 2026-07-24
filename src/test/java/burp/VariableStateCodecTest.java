@@ -39,6 +39,22 @@ class VariableStateCodecTest {
     }
 
     @Test
+    void readsVersionTwoStateAndWritesVersionThree() {
+        VariableDefinition variable = new VariableDefinition(
+                "id", "token", null, "value",
+                new VariableExtractionRule(true, "/token", "body", "token=(.+)"), 0);
+        String versionThree = VariableStateCodec.encode(List.of(), List.of(variable));
+        String versionTwo = "2" + versionThree.substring(versionThree.indexOf('\n'));
+
+        VariableStateCodec.State decoded = VariableStateCodec.decode(versionTwo);
+
+        assertEquals("3", VariableStateCodec.VERSION);
+        assertEquals("token", decoded.variables().get(0).getName());
+        assertEquals(VariableExtractionRule.MatchStrategy.LEGACY_PATH,
+                decoded.variables().get(0).getRule().getMatchStrategy());
+    }
+
+    @Test
     void migratesLegacyVariablesToUngroupedWithoutChangingNamesValuesRulesOrOrder() {
         VariableExtractionRule tokenRule = new VariableExtractionRule(true, "/token", "body", "token=(.+)");
         VariableStateCodec.State migrated = VariableStateCodec.migrateLegacy(

@@ -439,8 +439,10 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
 
         // Determine if selection is in headers or body
         int doubleNewline = textStr.indexOf("\r\n\r\n");
+        int separatorLength = 4;
         if (doubleNewline < 0) {
             doubleNewline = textStr.indexOf("\n\n");
+            separatorLength = 2;
         }
 
         String source = isRequest ? "request_body" : "body";
@@ -454,9 +456,9 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 contextText = textStr.substring(0, doubleNewline);
             } else {
                 source = isRequest ? "request_body" : "body";
-                contextText = textStr.substring(doubleNewline + 4);
-                contextStart = Math.max(0, start - (doubleNewline + 4));
-                contextEnd = Math.max(0, end - (doubleNewline + 4));
+                contextText = textStr.substring(doubleNewline + separatorLength);
+                contextStart = Math.max(0, start - (doubleNewline + separatorLength));
+                contextEnd = Math.max(0, end - (doubleNewline + separatorLength));
             }
         }
 
@@ -535,7 +537,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         gbc.gridy = 3;
         gbc.gridx = 0;
         gbc.weightx = 0.0;
-        panel.add(new JLabel(text("Match URL/Path (Regex):")), gbc);
+        panel.add(new JLabel(text("Path (literal; query ignored):")), gbc);
 
         JTextField pathField = new JTextField(path);
         gbc.gridx = 1;
@@ -610,18 +612,22 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 default: chosenSource = "body"; break;
             }
             String regexPattern = regexField.getText().trim();
+            if (!ExtractionEngine.isValidRegex(regexPattern)
+                    || !ExtractionEngine.hasCaptureGroup(regexPattern)) {
+                JOptionPane.showMessageDialog(dialog,
+                        text("The extraction regex must be valid and contain at least one capture group."),
+                        text("Error"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
 
             String reqBase64 = "";
-            String host = "";
-            int port = 0;
-            boolean secure = false;
+            String host = requestResponse.request().httpService().host();
+            int port = requestResponse.request().httpService().port();
+            boolean secure = requestResponse.request().httpService().secure();
 
             if (saveRequestCheckBox.isSelected()) {
                 byte[] requestBytes = requestResponse.request().toByteArray().getBytes();
                 reqBase64 = Base64.getEncoder().encodeToString(requestBytes);
-                host = requestResponse.request().httpService().host();
-                port = requestResponse.request().httpService().port();
-                secure = requestResponse.request().httpService().secure();
             }
 
             // Save variables & rules
@@ -629,10 +635,11 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                     folderName,
                     varName,
                     selectedText, 
-                    true, 
+                    false,
                     pathFilter, 
                     chosenSource, 
                     regexPattern,
+                    requestResponse.request().method(),
                     reqBase64,
                     host,
                     port,

@@ -30,7 +30,7 @@ Dynamic Variables is a Burp Suite extension that brings template variables and a
 | 3 | **Variables Dashboard** | A centralized tab in Burp Suite to manage variable values, auto-extraction rules, and background request execution. Includes independent toggles to enable/disable substitution in Repeater, Intruder, Scanner, and Proxy. |
 | 4 | **Request Auto-Refreshing** | Saves the request template that generated your token (e.g., login or auth endpoint). Re-sends it instantly in a background thread from the tab to fetch a fresh token. |
 | 5 | **Recursive Injection** | If your saved refresh request itself depends on other variables (like credentials or client keys), they are substituted automatically before launching the request. |
-| 6 | **Transparent Session Recovery** | When a request containing variables receives an HTTP `401 Unauthorized` or `403 Forbidden` response, the extension automatically pauses the transaction, executes the refresh request, updates the variable, and re-sends the original request with the fresh token. |
+| 6 | **Opt-in Session Recovery** | When explicitly enabled, a request containing variables that receives HTTP `401` or `403` can run an authorized refresh and retry. Safe methods are allowed by default; other methods require an additional per-variable permission. |
 | 7 | **Interactive Rule Editor** | Click *Update Rule from Response...* to run the saved request and highlight the new token value directly in a raw HTTP response editor to auto-update the regex rule. |
 | 8 | **Repeater Integration** | Send your saved login/refresh requests directly to the Repeater tab for manual tweaking and testing. |
 | 9 | **Request Editor Sub-Tab** | Adds a custom request editor tab next to Raw/Hex to display a sidebar listing all defined variables. Double-click any variable to insert a placeholder using the active syntax. |
@@ -96,6 +96,8 @@ With the tag `dv`, use `{{dv:token}}` or `{{dv:alice.token}}`. Only placeholders
 5. Choose **Ungrouped** or a folder, then select or type a variable name. The **Regex Pattern** is automatically generated for you.
 6. Make sure **"Save this request to refresh token in the future"** is checked.
 7. Click **Save Rule**.
+8. Review the explicit method, service, path, optional query, and request discriminator in the dashboard.
+9. Enable **Enable auto-extraction for this variable** only after confirming that the rule is scoped to the intended pentest identity. New rules are deliberately disabled by default.
 
 ### 3. Using the Dynamic Variables Request Tab
 1. Open the **Repeater** tab.
@@ -141,12 +143,17 @@ This makes it quick and less error-prone to repeat the same request as another u
 This modifies the template currently open in Repeater. Once a placeholder has been replaced with text, later updates to that variable no longer affect this request. Duplicate the Repeater tab first or use Repeater's undo support if you may need the original template again.
 
 ### 6. Transparent 401/403 Session Recovery
-1. Use a placeholder variable (e.g. `{{jwt}}`) in any Repeater, Intruder, or Scanner request.
-2. If the session expires and the server returns an HTTP 401 or 403 status:
-   - The extension intercepts the response before it is displayed.
-   - It executes the saved login request synchronously, updates the `jwt` variable value, and re-injects the new token.
-   - It re-sends the request to the target server and displays the successful response transparently.
-3. You do not need to manually copy-paste or click anything; the request heals itself.
+Recovery is disabled by default, including after migration from an earlier release.
+
+1. In **Configuration...**, explicitly enable session recovery for the required Burp tools. Repeater is the only preselected tool scope.
+2. Enable **Enable automatic session recovery (401/403)** globally.
+3. Select the variable and enable **Enable automatic refresh for this variable**.
+4. Requests using `GET`, `HEAD`, or `OPTIONS` can now be refreshed and retried after a configured status code.
+5. To replay any other method, additionally enable **Allow replay of non-idempotent requests** for every variable being refreshed.
+
+Refresh values are staged and committed together. If any refresh fails, the original 401/403 is preserved and no partial values are stored. A successful retry is returned with a Burp annotation recording the original and final status codes. The extension never logs token values, cookies, credentials, or message bodies.
+
+Passive extraction and session recovery have separate per-tool scopes. Rules from different variable folders are treated as different pentest identities; if more than one folder matches the same request, extraction fails closed. Within one folder, multiple values such as access and refresh tokens can be updated together. When concurrent requests use the same rule, only the response belonging to the most recently sent request may update it.
 
 ### 7. Interactive Rule Updating
 1. If the API response structure changes, select your variable in the table.
@@ -184,7 +191,7 @@ gradle build
 
 The output JAR will be created at:
 ```
-build/libs/dynamic-variables-1.0.2.jar
+build/libs/dynamic-variables-1.1.0.jar
 ```
 
 ### Load in Burp Suite
@@ -193,7 +200,7 @@ build/libs/dynamic-variables-1.0.2.jar
 2. Go to **Extensions** → **Installed**.
 3. Click **Add**.
 4. Set **Extension type** to `Java`.
-5. Select the compiled `dynamic-variables-1.0.2.jar` file and click **Next**.
+5. Select the compiled `dynamic-variables-1.1.0.jar` file and click **Next**.
 
 ## Running the Test Suite
 

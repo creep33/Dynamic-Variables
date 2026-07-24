@@ -3,154 +3,211 @@ package burp;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 public class VariableExtractionRule {
-    private boolean enabled;
-    private String matchUrl;
-    private String source; // "body" or "headers"
-    private String regex;
+    public enum MatchStrategy { EXPLICIT, LEGACY_EXACT, LEGACY_PATH }
+    public enum PatternMode { LITERAL, REGEX }
+    public enum DiscriminatorSource { NONE, REQUEST_BODY, REQUEST_HEADERS }
+    public enum ExtractionSource {
+        RESPONSE_BODY("body"),
+        RESPONSE_HEADERS("headers"),
+        REQUEST_BODY("request_body"),
+        REQUEST_HEADERS("request_headers");
 
-    // Saved request fields for token auto-refresh
+        private final String storedValue;
+
+        ExtractionSource(String storedValue) {
+            this.storedValue = storedValue;
+        }
+
+        String storedValue() {
+            return storedValue;
+        }
+
+        static ExtractionSource fromStored(String value) {
+            for (ExtractionSource source : values()) {
+                if (source.storedValue.equalsIgnoreCase(value)) return source;
+            }
+            return RESPONSE_BODY;
+        }
+    }
+
+    private boolean enabled;
+    private boolean automaticRefreshEnabled;
+    private boolean allowNonIdempotentReplay;
+    private String matchUrl;
+    private String source;
+    private String regex;
     private String savedRequestBase64 = "";
     private String savedHost = "";
-    private int savedPort = 0;
-    private boolean savedSecure = false;
+    private int savedPort;
+    private boolean savedSecure;
+
+    private MatchStrategy matchStrategy = MatchStrategy.EXPLICIT;
+    private String matchMethod = "";
+    private String matchHost = "";
+    private int matchPort;
+    private boolean matchSecure;
+    private String matchPath = "";
+    private PatternMode pathMatchMode = PatternMode.LITERAL;
+    private String matchQuery = "";
+    private PatternMode queryMatchMode = PatternMode.LITERAL;
+    private DiscriminatorSource discriminatorSource = DiscriminatorSource.NONE;
+    private String discriminatorRegex = "";
 
     public VariableExtractionRule() {
-        this.enabled = false;
-        this.matchUrl = "";
-        this.source = "body";
-        this.regex = "";
+        enabled = false;
+        matchUrl = "";
+        source = "body";
+        regex = "";
     }
 
     public VariableExtractionRule(boolean enabled, String matchUrl, String source, String regex) {
+        this();
         this.enabled = enabled;
-        this.matchUrl = matchUrl != null ? matchUrl : "";
-        this.source = source != null ? source : "body";
-        this.regex = regex != null ? regex : "";
+        this.matchUrl = safe(matchUrl);
+        this.source = safeDefault(source, "body");
+        this.regex = safe(regex);
+        this.matchStrategy = MatchStrategy.LEGACY_PATH;
     }
 
-    public VariableExtractionRule(boolean enabled, String matchUrl, String source, String regex, 
+    public VariableExtractionRule(boolean enabled, String matchUrl, String source, String regex,
                                   String savedRequestBase64, String savedHost, int savedPort, boolean savedSecure) {
-        this.enabled = enabled;
-        this.matchUrl = matchUrl != null ? matchUrl : "";
-        this.source = source != null ? source : "body";
-        this.regex = regex != null ? regex : "";
-        this.savedRequestBase64 = savedRequestBase64 != null ? savedRequestBase64 : "";
-        this.savedHost = savedHost != null ? savedHost : "";
+        this(enabled, matchUrl, source, regex);
+        this.savedRequestBase64 = safe(savedRequestBase64);
+        this.savedHost = safe(savedHost);
         this.savedPort = savedPort;
         this.savedSecure = savedSecure;
+        this.matchStrategy = this.savedRequestBase64.isEmpty()
+                ? MatchStrategy.LEGACY_PATH : MatchStrategy.LEGACY_EXACT;
     }
 
-    public boolean isEnabled() {
-        return enabled;
+    public VariableExtractionRule copy() {
+        return deserialize(serialize());
     }
 
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
+    public void configureExplicitMatch(String method, String host, int port, boolean secure,
+                                       String path, PatternMode pathMode, String query,
+                                       PatternMode queryMode, DiscriminatorSource discriminatorSource,
+                                       String discriminatorRegex) {
+        this.matchStrategy = MatchStrategy.EXPLICIT;
+        this.matchMethod = safe(method);
+        this.matchHost = safe(host);
+        this.matchPort = port;
+        this.matchSecure = secure;
+        this.matchPath = safe(path);
+        this.pathMatchMode = pathMode == null ? PatternMode.LITERAL : pathMode;
+        this.matchQuery = safe(query);
+        this.queryMatchMode = queryMode == null ? PatternMode.LITERAL : queryMode;
+        this.discriminatorSource = discriminatorSource == null ? DiscriminatorSource.NONE : discriminatorSource;
+        this.discriminatorRegex = safe(discriminatorRegex);
     }
 
-    public String getMatchUrl() {
-        return matchUrl;
-    }
+    public boolean isEnabled() { return enabled; }
+    public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    public boolean isAutomaticRefreshEnabled() { return automaticRefreshEnabled; }
+    public void setAutomaticRefreshEnabled(boolean value) { automaticRefreshEnabled = value; }
+    public boolean isAllowNonIdempotentReplay() { return allowNonIdempotentReplay; }
+    public void setAllowNonIdempotentReplay(boolean value) { allowNonIdempotentReplay = value; }
+    public String getMatchUrl() { return matchUrl; }
+    public void setMatchUrl(String matchUrl) { this.matchUrl = safe(matchUrl); }
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = safeDefault(source, "body"); }
+    public ExtractionSource getExtractionSource() { return ExtractionSource.fromStored(source); }
+    public String getRegex() { return regex; }
+    public void setRegex(String regex) { this.regex = safe(regex); }
+    public String getSavedRequestBase64() { return savedRequestBase64; }
+    public void setSavedRequestBase64(String value) { savedRequestBase64 = safe(value); }
+    public String getSavedHost() { return savedHost; }
+    public void setSavedHost(String value) { savedHost = safe(value); }
+    public int getSavedPort() { return savedPort; }
+    public void setSavedPort(int value) { savedPort = value; }
+    public boolean isSavedSecure() { return savedSecure; }
+    public void setSavedSecure(boolean value) { savedSecure = value; }
+    public MatchStrategy getMatchStrategy() { return matchStrategy; }
+    public String getMatchMethod() { return matchMethod; }
+    public String getMatchHost() { return matchHost; }
+    public int getMatchPort() { return matchPort; }
+    public boolean isMatchSecure() { return matchSecure; }
+    public String getMatchPath() { return matchPath; }
+    public PatternMode getPathMatchMode() { return pathMatchMode; }
+    public String getMatchQuery() { return matchQuery; }
+    public PatternMode getQueryMatchMode() { return queryMatchMode; }
+    public DiscriminatorSource getDiscriminatorSource() { return discriminatorSource; }
+    public String getDiscriminatorRegex() { return discriminatorRegex; }
 
-    public void setMatchUrl(String matchUrl) {
-        this.matchUrl = matchUrl;
-    }
-
-    public String getSource() {
-        return source;
-    }
-
-    public void setSource(String source) {
-        this.source = source;
-    }
-
-    public String getRegex() {
-        return regex;
-    }
-
-    public void setRegex(String regex) {
-        this.regex = regex;
-    }
-
-    public String getSavedRequestBase64() {
-        return savedRequestBase64;
-    }
-
-    public void setSavedRequestBase64(String savedRequestBase64) {
-        this.savedRequestBase64 = savedRequestBase64;
-    }
-
-    public String getSavedHost() {
-        return savedHost;
-    }
-
-    public void setSavedHost(String savedHost) {
-        this.savedHost = savedHost;
-    }
-
-    public int getSavedPort() {
-        return savedPort;
-    }
-
-    public void setSavedPort(int savedPort) {
-        this.savedPort = savedPort;
-    }
-
-    public boolean isSavedSecure() {
-        return savedSecure;
-    }
-
-    public void setSavedSecure(boolean savedSecure) {
-        this.savedSecure = savedSecure;
-    }
-
-    // Serialize to string safe for splitting with '|'
     public String serialize() {
-        try {
-            return URLEncoder.encode(matchUrl, StandardCharsets.UTF_8.name()) + "|" +
-                   URLEncoder.encode(source, StandardCharsets.UTF_8.name()) + "|" +
-                   enabled + "|" +
-                   URLEncoder.encode(regex, StandardCharsets.UTF_8.name()) + "|" +
-                   savedRequestBase64 + "|" +
-                   URLEncoder.encode(savedHost, StandardCharsets.UTF_8.name()) + "|" +
-                   savedPort + "|" +
-                   savedSecure;
-        } catch (Exception e) {
-            return "";
-        }
+        return String.join("|",
+                "v3",
+                enc(matchUrl), enc(source), Boolean.toString(enabled), enc(regex),
+                savedRequestBase64, enc(savedHost), Integer.toString(savedPort), Boolean.toString(savedSecure),
+                Boolean.toString(automaticRefreshEnabled), Boolean.toString(allowNonIdempotentReplay),
+                matchStrategy.name(), enc(matchMethod), enc(matchHost), Integer.toString(matchPort),
+                Boolean.toString(matchSecure), enc(matchPath), pathMatchMode.name(), enc(matchQuery),
+                queryMatchMode.name(), discriminatorSource.name(), enc(discriminatorRegex));
     }
 
-    // Deserialize from string (handles older versions gracefully)
     public static VariableExtractionRule deserialize(String data) {
-        if (data == null || data.isEmpty()) {
-            return new VariableExtractionRule();
-        }
+        if (data == null || data.isEmpty()) return new VariableExtractionRule();
         try {
             String[] parts = data.split("\\|", -1);
-            if (parts.length >= 8) {
-                String matchUrl = URLDecoder.decode(parts[0], StandardCharsets.UTF_8.name());
-                String source = URLDecoder.decode(parts[1], StandardCharsets.UTF_8.name());
-                boolean enabled = Boolean.parseBoolean(parts[2]);
-                String regex = URLDecoder.decode(parts[3], StandardCharsets.UTF_8.name());
-                String savedRequestBase64 = parts[4];
-                String savedHost = URLDecoder.decode(parts[5], StandardCharsets.UTF_8.name());
-                int savedPort = Integer.parseInt(parts[6]);
-                boolean savedSecure = Boolean.parseBoolean(parts[7]);
-
-                return new VariableExtractionRule(enabled, matchUrl, source, regex, 
-                        savedRequestBase64, savedHost, savedPort, savedSecure);
-            } else if (parts.length >= 4) {
-                String matchUrl = URLDecoder.decode(parts[0], StandardCharsets.UTF_8.name());
-                String source = URLDecoder.decode(parts[1], StandardCharsets.UTF_8.name());
-                boolean enabled = Boolean.parseBoolean(parts[2]);
-                String regex = URLDecoder.decode(parts[3], StandardCharsets.UTF_8.name());
-                return new VariableExtractionRule(enabled, matchUrl, source, regex);
+            if (parts.length >= 22 && "v3".equals(parts[0])) {
+                VariableExtractionRule rule = new VariableExtractionRule(
+                        Boolean.parseBoolean(parts[3]), dec(parts[1]), dec(parts[2]), dec(parts[4]),
+                        parts[5], dec(parts[6]), Integer.parseInt(parts[7]), Boolean.parseBoolean(parts[8]));
+                rule.automaticRefreshEnabled = Boolean.parseBoolean(parts[9]);
+                rule.allowNonIdempotentReplay = Boolean.parseBoolean(parts[10]);
+                rule.matchStrategy = enumValue(MatchStrategy.class, parts[11], MatchStrategy.LEGACY_PATH);
+                rule.matchMethod = dec(parts[12]);
+                rule.matchHost = dec(parts[13]);
+                rule.matchPort = Integer.parseInt(parts[14]);
+                rule.matchSecure = Boolean.parseBoolean(parts[15]);
+                rule.matchPath = dec(parts[16]);
+                rule.pathMatchMode = enumValue(PatternMode.class, parts[17], PatternMode.LITERAL);
+                rule.matchQuery = dec(parts[18]);
+                rule.queryMatchMode = enumValue(PatternMode.class, parts[19], PatternMode.LITERAL);
+                rule.discriminatorSource = enumValue(
+                        DiscriminatorSource.class, parts[20], DiscriminatorSource.NONE);
+                rule.discriminatorRegex = dec(parts[21]);
+                return rule;
             }
-        } catch (Exception e) {
-            // Ignore and return default
+            if (parts.length >= 8) {
+                return new VariableExtractionRule(
+                        Boolean.parseBoolean(parts[2]), dec(parts[0]), dec(parts[1]), dec(parts[3]),
+                        parts[4], dec(parts[5]), Integer.parseInt(parts[6]), Boolean.parseBoolean(parts[7]));
+            }
+            if (parts.length >= 4) {
+                return new VariableExtractionRule(
+                        Boolean.parseBoolean(parts[2]), dec(parts[0]), dec(parts[1]), dec(parts[3]));
+            }
+        } catch (Exception ignored) {
+            // Invalid persisted rules are disabled rather than guessed.
         }
         return new VariableExtractionRule();
+    }
+
+    private static <T extends Enum<T>> T enumValue(Class<T> type, String value, T fallback) {
+        try {
+            return Enum.valueOf(type, value.toUpperCase(Locale.ROOT));
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private static String enc(String value) {
+        return URLEncoder.encode(safe(value), StandardCharsets.UTF_8);
+    }
+
+    private static String dec(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String safeDefault(String value, String fallback) {
+        return value == null ? fallback : value;
     }
 }

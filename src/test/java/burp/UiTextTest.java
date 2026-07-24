@@ -20,4 +20,17 @@ class UiTextTest {
         assertEquals("Cambiar carpeta de variables...",
                 UiText.get(UiLanguage.SPANISH, "Change variable folder..."));
     }
+
+    @Test
+    void translatesSafetyCriticalAutomationControls() {
+        assertEquals("Activar recuperación automática de sesión (401/403)",
+                UiText.get(UiLanguage.SPANISH,
+                        "Enable automatic session recovery (401/403)"));
+        assertEquals("Activar actualización automática para esta variable",
+                UiText.get(UiLanguage.SPANISH,
+                        "Enable automatic refresh for this variable"));
+        assertEquals("Permitir reenvío de peticiones no idempotentes",
+                UiText.get(UiLanguage.SPANISH,
+                        "Allow replay of non-idempotent requests"));
+    }
 }

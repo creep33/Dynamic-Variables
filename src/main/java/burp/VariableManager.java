@@ -40,6 +40,7 @@ public final class VariableManager {
     private final List<VariableDefinition> definitions = new ArrayList<>();
     private String variableSearch = "";
     private static final String STATE_V2_KEY = "dynamic_variables_state_v2";
+    private static final String STATE_V3_KEY = "dynamic_variables_state_v3";
 
     private boolean replacementMasterEnabled = true;
     private boolean replacementEnabled = true;
@@ -47,6 +48,10 @@ public final class VariableManager {
     private boolean replacementScannerEnabled = true;
     private boolean replacementProxyEnabled = false;
     private boolean extractionEnabled = true;
+    private boolean sessionRecoveryEnabled = false;
+    private boolean extractionDebugEnabled = false;
+    private EnumSet<AutomationTool> extractionTools = EnumSet.of(AutomationTool.REPEATER);
+    private EnumSet<AutomationTool> recoveryTools = EnumSet.of(AutomationTool.REPEATER);
     private String refreshStatusCodes = "401, 403";
     private volatile boolean placeholderTagEnabled = false;
     private volatile String placeholderTag = "dv";
@@ -64,12 +69,28 @@ public final class VariableManager {
     private JCheckBox scannerReplaceCheckBox;
     private JCheckBox proxyReplaceCheckBox;
     private JCheckBox globalExtractCheckBox;
+    private JCheckBox globalRecoveryCheckBox;
     private JTextField refreshStatusCodesField;
+    private JLabel refreshStatusCodesLabel;
+    private JSeparator refreshStatusCodesSeparator;
     private JLabel placeholderUsageLabel;
 
     // Rule Panel Components
     private JCheckBox ruleEnabledCheckBox;
+    private JCheckBox automaticRefreshCheckBox;
+    private JCheckBox allowNonIdempotentReplayCheckBox;
     private JTextField matchUrlField;
+    private JLabel matchStrategyLabel;
+    private JButton convertMatchButton;
+    private JTextField matchMethodField;
+    private JTextField matchHostField;
+    private JTextField matchPortField;
+    private JCheckBox matchSecureCheckBox;
+    private JComboBox<String> pathModeComboBox;
+    private JTextField queryField;
+    private JComboBox<String> queryModeComboBox;
+    private JComboBox<String> discriminatorSourceComboBox;
+    private JTextField discriminatorRegexField;
     private JComboBox<String> sourceComboBox;
     private JTextField regexField;
     private JButton updateRuleButton;
@@ -153,7 +174,8 @@ public final class VariableManager {
 
     public void addOrUpdateExtractionRuleInFolder(String folderName, String localName, String value,
                                                    boolean ruleEnabled, String matchUrl, String source,
-                                                   String regex, String reqBase64, String host, int port, boolean secure) {
+                                                   String regex, String matchMethod, String reqBase64,
+                                                   String host, int port, boolean secure) {
         String qualified = qualifyVariableName(folderName, localName);
         synchronized (lock) {
             if (!variableNames.contains(qualified)) {
@@ -167,7 +189,7 @@ public final class VariableManager {
             }
         }
         addOrUpdateExtractionRule(qualified, value, ruleEnabled, matchUrl, source, regex,
-                reqBase64, host, port, secure);
+                matchMethod, reqBase64, host, port, secure);
     }
 
     public boolean isReplacementMasterEnabled() {
@@ -194,6 +216,34 @@ public final class VariableManager {
         return extractionEnabled;
     }
 
+    public boolean isSessionRecoveryEnabled() {
+        return sessionRecoveryEnabled;
+    }
+
+    public boolean isExtractionDebugEnabled() {
+        return extractionDebugEnabled;
+    }
+
+    public boolean isExtractionToolEnabled(AutomationTool tool) {
+        synchronized (lock) {
+            return tool != null && extractionTools.contains(tool);
+        }
+    }
+
+    public boolean isRecoveryToolEnabled(AutomationTool tool) {
+        synchronized (lock) {
+            return tool != null && recoveryTools.contains(tool);
+        }
+    }
+
+    public String getVariableContext(String name) {
+        synchronized (lock) {
+            VariableDefinition definition = findDefinitionByKey(name);
+            return definition == null || definition.getFolderId() == null
+                    ? "__ungrouped__" : definition.getFolderId();
+        }
+    }
+
     public Set<Integer> getRefreshStatusCodes() {
         Set<Integer> codes = new HashSet<>();
         try {
@@ -213,30 +263,40 @@ public final class VariableManager {
     }
 
     public void updateVariableValue(String name, String value) {
+        updateVariableValues(Map.of(name, value));
+    }
+
+    public void updateVariableValues(Map<String, String> updates) {
+        if (updates == null || updates.isEmpty()) return;
         synchronized (lock) {
-            values.put(name, value);
-            VariableDefinition definition = findDefinitionByKey(name);
-            if (definition != null) definition.setValue(value);
+            for (Map.Entry<String, String> update : updates.entrySet()) {
+                values.put(update.getKey(), update.getValue());
+                VariableDefinition definition = findDefinitionByKey(update.getKey());
+                if (definition != null) definition.setValue(update.getValue());
+            }
             savePreferences();
         }
         SwingUtilities.invokeLater(() -> {
-            int row = tableModel == null ? -1 : tableModel.findVariableRow(name);
-            if (row >= 0) {
-                tableModel.fireTableCellUpdated(row, 1);
-                // If this row is currently selected, update the text area as well
-                int selectedRow = variablesTable.getSelectedRow();
-                if (selectedRow == row) {
-                    isUpdatingUI = true;
-                    valueTextArea.setText(value);
-                    isUpdatingUI = false;
+            for (Map.Entry<String, String> update : updates.entrySet()) {
+                int row = tableModel == null ? -1 : tableModel.findVariableRow(update.getKey());
+                if (row >= 0) {
+                    tableModel.fireTableCellUpdated(row, 1);
+                    int selectedRow = variablesTable.getSelectedRow();
+                    if (selectedRow == row) {
+                        isUpdatingUI = true;
+                        valueTextArea.setText(update.getValue());
+                        isUpdatingUI = false;
+                    }
                 }
             }
         });
     }
 
     public void addOrUpdateExtractionRule(String name, String value, boolean ruleEnabled, String matchUrl, String source, 
-                                          String regex, String reqBase64, String host, int port, boolean secure) {
+                                          String regex, String matchMethod, String reqBase64,
+                                          String host, int port, boolean secure) {
         synchronized (lock) {
+            VariableExtractionRule previousRule = rules.get(name);
             if (!variableNames.contains(name)) {
                 variableNames.add(name);
                 String folderName = "";
@@ -256,6 +316,25 @@ public final class VariableManager {
             values.put(name, value);
             VariableExtractionRule rule = new VariableExtractionRule(ruleEnabled, matchUrl, source, regex, 
                     reqBase64, host, port, secure);
+            if (previousRule != null) {
+                rule.setEnabled(previousRule.isEnabled());
+                rule.setAutomaticRefreshEnabled(previousRule.isAutomaticRefreshEnabled());
+                rule.setAllowNonIdempotentReplay(previousRule.isAllowNonIdempotentReplay());
+            }
+            if (matchMethod != null && !matchMethod.isEmpty() && host != null && !host.isEmpty()) {
+                try {
+                    String fullPath = matchUrl == null ? "" : matchUrl;
+                    int queryAt = fullPath.indexOf('?');
+                    String path = queryAt < 0 ? fullPath : fullPath.substring(0, queryAt);
+                    rule.configureExplicitMatch(matchMethod, host, port, secure, path,
+                            VariableExtractionRule.PatternMode.LITERAL, "",
+                            VariableExtractionRule.PatternMode.LITERAL,
+                            VariableExtractionRule.DiscriminatorSource.NONE, "");
+                } catch (Exception error) {
+                    api.logging().logToError("Could not initialize explicit matching for '" + name
+                            + "': " + error.getMessage());
+                }
+            }
             rules.put(name, rule);
             VariableDefinition definition = findDefinitionByKey(name);
             if (definition != null) {
@@ -285,7 +364,10 @@ public final class VariableManager {
         mainPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
 
         // --- TOP GLOBAL SETTINGS PANEL ---
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 5));
+        JPanel topPanel = new JPanel();
+        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
+        JPanel replacementPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 5));
+        JPanel automationPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 5));
         
         globalReplaceCheckBox = new JCheckBox("Repeater", replacementEnabled);
         globalReplaceCheckBox.setFont(new Font(globalReplaceCheckBox.getFont().getName(), Font.BOLD, 12));
@@ -331,8 +413,8 @@ public final class VariableManager {
             scannerReplaceCheckBox.setVisible(visible);
             proxyReplaceCheckBox.setVisible(visible);
             savePreferences();
-            topPanel.revalidate();
-            topPanel.repaint();
+            replacementPanel.revalidate();
+            replacementPanel.repaint();
         });
 
         globalExtractCheckBox = new JCheckBox(text("Enable Response Auto-Extraction"), extractionEnabled);
@@ -343,43 +425,60 @@ public final class VariableManager {
             savePreferences();
         });
 
-        topPanel.add(replacementMasterCheckBox);
-        topPanel.add(globalReplaceCheckBox);
-        topPanel.add(intruderReplaceCheckBox);
-        topPanel.add(scannerReplaceCheckBox);
-        topPanel.add(proxyReplaceCheckBox);
+        globalRecoveryCheckBox = new JCheckBox(
+                text("Enable automatic session recovery (401/403)"), sessionRecoveryEnabled);
+        globalRecoveryCheckBox.setFont(new Font(
+                globalRecoveryCheckBox.getFont().getName(), Font.BOLD, 12));
+        globalRecoveryCheckBox.setToolTipText(text(
+                "Refreshes enabled variables and retries authorized requests after configured status codes."));
+        globalRecoveryCheckBox.addActionListener(e -> {
+            sessionRecoveryEnabled = globalRecoveryCheckBox.isSelected();
+            updateRecoveryControlsVisibility();
+            savePreferences();
+        });
+
+        replacementPanel.add(replacementMasterCheckBox);
+        replacementPanel.add(globalReplaceCheckBox);
+        replacementPanel.add(intruderReplaceCheckBox);
+        replacementPanel.add(scannerReplaceCheckBox);
+        replacementPanel.add(proxyReplaceCheckBox);
         
         // Custom vertical divider
         JSeparator separator = new JSeparator(JSeparator.VERTICAL);
         separator.setPreferredSize(new Dimension(3, 20));
-        topPanel.add(separator);
+        replacementPanel.add(separator);
         
-        topPanel.add(globalExtractCheckBox);
+        automationPanel.add(globalExtractCheckBox);
+        automationPanel.add(globalRecoveryCheckBox);
 
         // Custom vertical divider 2
-        JSeparator separator2 = new JSeparator(JSeparator.VERTICAL);
-        separator2.setPreferredSize(new Dimension(3, 20));
-        topPanel.add(separator2);
+        refreshStatusCodesSeparator = new JSeparator(JSeparator.VERTICAL);
+        refreshStatusCodesSeparator.setPreferredSize(new Dimension(3, 20));
+        automationPanel.add(refreshStatusCodesSeparator);
 
-        JLabel refreshStatusCodesLabel = new JLabel(text("Refresh Status Codes:"));
+        refreshStatusCodesLabel = new JLabel(text("Refresh Status Codes:"));
         refreshStatusCodesLabel.setToolTipText(text("HTTP status codes (comma separated) that trigger an automatic token refresh (e.g., 401, 403)."));
-        topPanel.add(refreshStatusCodesLabel);
+        automationPanel.add(refreshStatusCodesLabel);
         refreshStatusCodesField = new JTextField(refreshStatusCodes, 8);
         refreshStatusCodesField.setToolTipText(text("HTTP status codes (comma separated) that trigger an automatic token refresh (e.g., 401, 403)."));
         refreshStatusCodesField.getDocument().addDocumentListener(new SimpleDocumentListener(() -> {
             refreshStatusCodes = refreshStatusCodesField.getText();
             savePreferences();
         }));
-        topPanel.add(refreshStatusCodesField);
+        automationPanel.add(refreshStatusCodesField);
 
         JSeparator separator3 = new JSeparator(JSeparator.VERTICAL);
         separator3.setPreferredSize(new Dimension(3, 20));
-        topPanel.add(separator3);
+        automationPanel.add(separator3);
 
         JButton settingsButton = new JButton(text("Configuration..."));
         settingsButton.setToolTipText(text("Configure the interface language and the optional tag that uniquely identifies variable placeholders."));
         settingsButton.addActionListener(e -> showPlaceholderSettingsDialog());
-        topPanel.add(settingsButton);
+        automationPanel.add(settingsButton);
+
+        topPanel.add(replacementPanel);
+        topPanel.add(automationPanel);
+        updateRecoveryControlsVisibility();
 
         mainPanel.add(topPanel, BorderLayout.NORTH);
 
@@ -569,27 +668,116 @@ public final class VariableManager {
 
         // Checkbox: Enable rule
         ruleEnabledCheckBox = new JCheckBox(text("Enable auto-extraction for this variable"));
-        ruleEnabledCheckBox.addActionListener(e -> updateActiveRuleFromUI());
+        ruleEnabledCheckBox.addActionListener(e -> handleRuleActivation(ruleEnabledCheckBox, false));
         rgbc.gridy = 0;
         rgbc.gridwidth = 2;
         rulePanel.add(ruleEnabledCheckBox, rgbc);
 
+        automaticRefreshCheckBox = new JCheckBox(text("Enable automatic refresh for this variable"));
+        automaticRefreshCheckBox.addActionListener(e -> handleRuleActivation(automaticRefreshCheckBox, true));
+        rgbc.gridy = 1;
+        rulePanel.add(automaticRefreshCheckBox, rgbc);
+
+        allowNonIdempotentReplayCheckBox = new JCheckBox(
+                text("Allow replay of non-idempotent requests"));
+        allowNonIdempotentReplayCheckBox.setToolTipText(text(
+                "Allows automatic replay of methods other than GET, HEAD, and OPTIONS."));
+        allowNonIdempotentReplayCheckBox.addActionListener(e -> updateActiveRuleFromUI());
+        rgbc.gridy = 2;
+        rulePanel.add(allowNonIdempotentReplayCheckBox, rgbc);
+
         rgbc.gridwidth = 1;
 
-        // Target URL/Path Filter
-        rgbc.gridy = 1;
+        rgbc.gridy = 3;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
-        rulePanel.add(new JLabel(text("Match URL/Path (Regex):")), rgbc);
-        
-        matchUrlField = new JTextField();
-        matchUrlField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        rulePanel.add(new JLabel(text("Matching mode:")), rgbc);
+        JPanel strategyPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        matchStrategyLabel = new JLabel();
+        convertMatchButton = new JButton(text("Convert to explicit filters"));
+        convertMatchButton.addActionListener(e -> convertActiveRuleToExplicitMatch());
+        strategyPanel.add(matchStrategyLabel);
+        strategyPanel.add(convertMatchButton);
         rgbc.gridx = 1;
         rgbc.weightx = 1.0;
-        rulePanel.add(matchUrlField, rgbc);
+        rulePanel.add(strategyPanel, rgbc);
 
-        // Extract From Source JComboBox
-        rgbc.gridy = 2;
+        rgbc.gridy = 4;
+        rgbc.gridx = 0;
+        rgbc.weightx = 0.0;
+        rulePanel.add(new JLabel(text("Method:")), rgbc);
+        matchMethodField = new JTextField();
+        matchMethodField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        rgbc.gridx = 1;
+        rgbc.weightx = 1.0;
+        rulePanel.add(matchMethodField, rgbc);
+
+        rgbc.gridy = 5;
+        rgbc.gridx = 0;
+        rgbc.weightx = 0.0;
+        rulePanel.add(new JLabel(text("Service:")), rgbc);
+        JPanel servicePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        matchHostField = new JTextField(16);
+        matchPortField = new JTextField(5);
+        matchSecureCheckBox = new JCheckBox("HTTPS");
+        matchHostField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        matchPortField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        matchSecureCheckBox.addActionListener(e -> updateActiveRuleFromUI());
+        servicePanel.add(matchHostField);
+        servicePanel.add(matchPortField);
+        servicePanel.add(matchSecureCheckBox);
+        rgbc.gridx = 1;
+        rgbc.weightx = 1.0;
+        rulePanel.add(servicePanel, rgbc);
+
+        rgbc.gridy = 6;
+        rgbc.gridx = 0;
+        rgbc.weightx = 0.0;
+        rulePanel.add(new JLabel(text("Path filter:")), rgbc);
+        JPanel pathPanel = new JPanel(new BorderLayout(5, 0));
+        pathModeComboBox = new JComboBox<>(new String[]{text("Literal"), text("Regular expression")});
+        pathModeComboBox.addActionListener(e -> updateActiveRuleFromUI());
+        matchUrlField = new JTextField();
+        matchUrlField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        pathPanel.add(pathModeComboBox, BorderLayout.WEST);
+        pathPanel.add(matchUrlField, BorderLayout.CENTER);
+        rgbc.gridx = 1;
+        rgbc.weightx = 1.0;
+        rulePanel.add(pathPanel, rgbc);
+
+        rgbc.gridy = 7;
+        rgbc.gridx = 0;
+        rgbc.weightx = 0.0;
+        rulePanel.add(new JLabel(text("Query filter:")), rgbc);
+        JPanel queryPanel = new JPanel(new BorderLayout(5, 0));
+        queryModeComboBox = new JComboBox<>(new String[]{text("Literal"), text("Regular expression")});
+        queryModeComboBox.addActionListener(e -> updateActiveRuleFromUI());
+        queryField = new JTextField();
+        queryField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        queryPanel.add(queryModeComboBox, BorderLayout.WEST);
+        queryPanel.add(queryField, BorderLayout.CENTER);
+        rgbc.gridx = 1;
+        rgbc.weightx = 1.0;
+        rulePanel.add(queryPanel, rgbc);
+
+        rgbc.gridy = 8;
+        rgbc.gridx = 0;
+        rgbc.weightx = 0.0;
+        rulePanel.add(new JLabel(text("Request discriminator:")), rgbc);
+        JPanel discriminatorPanel = new JPanel(new BorderLayout(5, 0));
+        discriminatorSourceComboBox = new JComboBox<>(new String[]{
+                text("None"), text("Request Body"), text("Request Headers")});
+        discriminatorSourceComboBox.addActionListener(e -> updateActiveRuleFromUI());
+        discriminatorRegexField = new JTextField();
+        discriminatorRegexField.getDocument().addDocumentListener(
+                new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        discriminatorPanel.add(discriminatorSourceComboBox, BorderLayout.WEST);
+        discriminatorPanel.add(discriminatorRegexField, BorderLayout.CENTER);
+        rgbc.gridx = 1;
+        rgbc.weightx = 1.0;
+        rulePanel.add(discriminatorPanel, rgbc);
+
+        rgbc.gridy = 9;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
         rulePanel.add(new JLabel(text("Extract From:")), rgbc);
@@ -602,8 +790,7 @@ public final class VariableManager {
         rgbc.weightx = 1.0;
         rulePanel.add(sourceComboBox, rgbc);
 
-        // Regex Pattern
-        rgbc.gridy = 3;
+        rgbc.gridy = 10;
         rgbc.gridx = 0;
         rgbc.weightx = 0.0;
         rulePanel.add(new JLabel(text("Regex (with 1 capture group):")), rgbc);
@@ -614,8 +801,7 @@ public final class VariableManager {
         rgbc.weightx = 1.0;
         rulePanel.add(regexField, rgbc);
 
-        // Update Rule from Response Button (Row 4)
-        rgbc.gridy = 4;
+        rgbc.gridy = 11;
         rgbc.gridx = 0;
         rgbc.gridwidth = 2;
         updateRuleButton = new JButton(text("Update Rule from Response..."));
@@ -672,7 +858,10 @@ public final class VariableManager {
         rightPanel.add(valuePanel, gbc);
 
         splitPane.setLeftComponent(leftPanel);
-        splitPane.setRightComponent(rightPanel);
+        JScrollPane detailsScrollPane = new JScrollPane(rightPanel);
+        detailsScrollPane.setBorder(null);
+        detailsScrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        splitPane.setRightComponent(detailsScrollPane);
         mainPanel.add(splitPane, BorderLayout.CENTER);
 
         // --- FOOTER INSTRUCTIONS ---
@@ -701,6 +890,10 @@ public final class VariableManager {
             }
         });
         JCheckBox tagEnabledCheckBox = new JCheckBox(text("Use a tag in variable placeholders"), placeholderTagEnabled);
+        JCheckBox diagnosticCheckBox = new JCheckBox(
+                text("Enable auto-extraction diagnostic logs"), extractionDebugEnabled);
+        Map<AutomationTool, JCheckBox> extractionToolChecks = new EnumMap<>(AutomationTool.class);
+        Map<AutomationTool, JCheckBox> recoveryToolChecks = new EnumMap<>(AutomationTool.class);
         JTextField tagField = new JTextField(placeholderTag, 20);
         JLabel previewLabel = new JLabel();
         JLabel validationLabel = new JLabel(" ");
@@ -755,6 +948,26 @@ public final class VariableManager {
         behaviorNotice.add(new JLabel(text("Existing requests are not rewritten automatically. When tagging is enabled,")));
         behaviorNotice.add(new JLabel(text("only placeholders containing the configured tag are replaced.")));
         panel.add(behaviorNotice, gbc);
+        gbc.gridy = 7;
+        panel.add(diagnosticCheckBox, gbc);
+
+        gbc.gridy = 8;
+        JPanel automationScopePanel = new JPanel(new GridLayout(0, 3, 8, 4));
+        automationScopePanel.setBorder(BorderFactory.createTitledBorder(text("Automation tool scope")));
+        automationScopePanel.add(new JLabel(text("Tool")));
+        automationScopePanel.add(new JLabel(text("Response extraction")));
+        automationScopePanel.add(new JLabel(text("Session recovery")));
+        for (AutomationTool tool : AutomationTool.values()) {
+            JCheckBox extraction = new JCheckBox("", extractionTools.contains(tool));
+            JCheckBox recovery = new JCheckBox("", recoveryTools.contains(tool));
+            extractionToolChecks.put(tool, extraction);
+            recoveryToolChecks.put(tool, recovery);
+            automationScopePanel.add(new JLabel(tool.name().charAt(0)
+                    + tool.name().substring(1).toLowerCase(Locale.ROOT)));
+            automationScopePanel.add(extraction);
+            automationScopePanel.add(recovery);
+        }
+        panel.add(automationScopePanel, gbc);
 
         boolean enabled;
         String tag;
@@ -773,6 +986,13 @@ public final class VariableManager {
 
         placeholderTagEnabled = enabled;
         if (!tag.isEmpty()) placeholderTag = tag;
+        extractionDebugEnabled = diagnosticCheckBox.isSelected();
+        extractionTools = EnumSet.noneOf(AutomationTool.class);
+        recoveryTools = EnumSet.noneOf(AutomationTool.class);
+        for (AutomationTool tool : AutomationTool.values()) {
+            if (extractionToolChecks.get(tool).isSelected()) extractionTools.add(tool);
+            if (recoveryToolChecks.get(tool).isSelected()) recoveryTools.add(tool);
+        }
         UiLanguage selectedLanguage = (UiLanguage) languageComboBox.getSelectedItem();
         boolean languageChanged = selectedLanguage != null && selectedLanguage != uiLanguage;
         if (selectedLanguage != null) uiLanguage = selectedLanguage;
@@ -798,6 +1018,17 @@ public final class VariableManager {
         }
     }
 
+    private void updateRecoveryControlsVisibility() {
+        boolean visible = globalRecoveryCheckBox != null && globalRecoveryCheckBox.isSelected();
+        if (refreshStatusCodesSeparator != null) refreshStatusCodesSeparator.setVisible(visible);
+        if (refreshStatusCodesLabel != null) refreshStatusCodesLabel.setVisible(visible);
+        if (refreshStatusCodesField != null) refreshStatusCodesField.setVisible(visible);
+        if (globalRecoveryCheckBox != null && globalRecoveryCheckBox.getParent() != null) {
+            globalRecoveryCheckBox.getParent().revalidate();
+            globalRecoveryCheckBox.getParent().repaint();
+        }
+    }
+
     private void updateDetailsPanel(int selectedRow) {
         if (selectedRow < 0) {
             isUpdatingUI = true;
@@ -805,6 +1036,11 @@ public final class VariableManager {
             valueTextArea.setEnabled(false);
             ruleEnabledCheckBox.setSelected(false);
             ruleEnabledCheckBox.setEnabled(false);
+            automaticRefreshCheckBox.setSelected(false);
+            automaticRefreshCheckBox.setEnabled(false);
+            allowNonIdempotentReplayCheckBox.setSelected(false);
+            allowNonIdempotentReplayCheckBox.setEnabled(false);
+            setMatchFieldsEnabled(false);
             matchUrlField.setText("");
             matchUrlField.setEnabled(false);
             sourceComboBox.setSelectedIndex(0);
@@ -836,9 +1072,35 @@ public final class VariableManager {
 
         ruleEnabledCheckBox.setEnabled(true);
         ruleEnabledCheckBox.setSelected(rule.isEnabled());
+        automaticRefreshCheckBox.setEnabled(true);
+        automaticRefreshCheckBox.setSelected(rule.isAutomaticRefreshEnabled());
+        allowNonIdempotentReplayCheckBox.setEnabled(true);
+        allowNonIdempotentReplayCheckBox.setSelected(rule.isAllowNonIdempotentReplay());
 
-        matchUrlField.setEnabled(true);
-        matchUrlField.setText(rule.getMatchUrl());
+        boolean explicit = rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT;
+        matchStrategyLabel.setText(switch (rule.getMatchStrategy()) {
+            case EXPLICIT -> text("Explicit filters");
+            case LEGACY_EXACT -> text("Legacy exact saved request matching");
+            case LEGACY_PATH -> text("Legacy path regex matching");
+        });
+        convertMatchButton.setVisible(!explicit);
+        setMatchFieldsEnabled(explicit);
+        matchMethodField.setText(rule.getMatchMethod());
+        matchHostField.setText(rule.getMatchHost());
+        matchPortField.setText(rule.getMatchPort() <= 0 ? "" : Integer.toString(rule.getMatchPort()));
+        matchSecureCheckBox.setSelected(rule.isMatchSecure());
+        pathModeComboBox.setSelectedIndex(
+                rule.getPathMatchMode() == VariableExtractionRule.PatternMode.REGEX ? 1 : 0);
+        matchUrlField.setText(explicit ? rule.getMatchPath() : rule.getMatchUrl());
+        queryModeComboBox.setSelectedIndex(
+                rule.getQueryMatchMode() == VariableExtractionRule.PatternMode.REGEX ? 1 : 0);
+        queryField.setText(rule.getMatchQuery());
+        discriminatorSourceComboBox.setSelectedIndex(switch (rule.getDiscriminatorSource()) {
+            case REQUEST_BODY -> 1;
+            case REQUEST_HEADERS -> 2;
+            default -> 0;
+        });
+        discriminatorRegexField.setText(rule.getDiscriminatorRegex());
 
         sourceComboBox.setEnabled(true);
         if ("request_body".equals(rule.getSource())) {
@@ -885,7 +1147,18 @@ public final class VariableManager {
     private void clearRuleFields() {
         isUpdatingUI = true;
         ruleEnabledCheckBox.setSelected(false);
+        automaticRefreshCheckBox.setSelected(false);
+        allowNonIdempotentReplayCheckBox.setSelected(false);
+        matchStrategyLabel.setText("");
+        convertMatchButton.setVisible(false);
+        setMatchFieldsEnabled(false);
+        matchMethodField.setText("");
+        matchHostField.setText("");
+        matchPortField.setText("");
+        matchSecureCheckBox.setSelected(false);
         matchUrlField.setText("");
+        queryField.setText("");
+        discriminatorRegexField.setText("");
         sourceComboBox.setSelectedIndex(0);
         regexField.setText("");
         updateRuleButton.setEnabled(false);
@@ -902,7 +1175,6 @@ public final class VariableManager {
         String name = tableModel.variableKeyAt(selectedRow);
         if (name != null) {
             boolean ruleEnabled = ruleEnabledCheckBox.isSelected();
-            String matchUrl = matchUrlField.getText().trim();
             String source;
             switch (sourceComboBox.getSelectedIndex()) {
                 case 1: source = "headers"; break;
@@ -914,13 +1186,33 @@ public final class VariableManager {
 
             synchronized (lock) {
                 VariableExtractionRule existingRule = rules.get(name);
-                String reqBase64 = existingRule != null ? existingRule.getSavedRequestBase64() : "";
-                String host = existingRule != null ? existingRule.getSavedHost() : "";
-                int port = existingRule != null ? existingRule.getSavedPort() : 0;
-                boolean secure = existingRule != null && existingRule.isSavedSecure();
-
-                VariableExtractionRule rule = new VariableExtractionRule(ruleEnabled, matchUrl, source, regex,
-                        reqBase64, host, port, secure);
+                VariableExtractionRule rule = existingRule == null
+                        ? new VariableExtractionRule() : existingRule.copy();
+                rule.setEnabled(ruleEnabled);
+                rule.setAutomaticRefreshEnabled(automaticRefreshCheckBox.isSelected());
+                rule.setAllowNonIdempotentReplay(allowNonIdempotentReplayCheckBox.isSelected());
+                rule.setSource(source);
+                rule.setRegex(regex);
+                if (rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT) {
+                    int port = parsePort(matchPortField.getText());
+                    rule.configureExplicitMatch(
+                            matchMethodField.getText().trim().toUpperCase(Locale.ROOT),
+                            matchHostField.getText().trim(), port, matchSecureCheckBox.isSelected(),
+                            matchUrlField.getText().trim(),
+                            pathModeComboBox.getSelectedIndex() == 1
+                                    ? VariableExtractionRule.PatternMode.REGEX
+                                    : VariableExtractionRule.PatternMode.LITERAL,
+                            queryField.getText().trim(),
+                            queryModeComboBox.getSelectedIndex() == 1
+                                    ? VariableExtractionRule.PatternMode.REGEX
+                                    : VariableExtractionRule.PatternMode.LITERAL,
+                            switch (discriminatorSourceComboBox.getSelectedIndex()) {
+                                case 1 -> VariableExtractionRule.DiscriminatorSource.REQUEST_BODY;
+                                case 2 -> VariableExtractionRule.DiscriminatorSource.REQUEST_HEADERS;
+                                default -> VariableExtractionRule.DiscriminatorSource.NONE;
+                            },
+                            discriminatorRegexField.getText().trim());
+                }
                 rules.put(name, rule);
                 VariableDefinition definition = findDefinitionByKey(name);
                 if (definition != null) definition.setRule(rule);
@@ -929,6 +1221,122 @@ public final class VariableManager {
             // Update Table display
             tableModel.fireTableCellUpdated(selectedRow, 2);
         }
+    }
+
+    private void handleRuleActivation(JCheckBox checkBox, boolean refresh) {
+        if (isUpdatingUI) return;
+        if (checkBox.isSelected()) {
+            String error = activeRuleValidationError(refresh);
+            if (error != null) {
+                checkBox.setSelected(false);
+                JOptionPane.showMessageDialog(mainPanel, text(error), text("Error"),
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }
+        updateActiveRuleFromUI();
+    }
+
+    private String activeRuleValidationError(boolean refresh) {
+        String extractionRegex = regexField.getText().trim();
+        if (!ExtractionEngine.isValidRegex(extractionRegex)
+                || !ExtractionEngine.hasCaptureGroup(extractionRegex)) {
+            return "The extraction regex must be valid and contain at least one capture group.";
+        }
+        if (refresh) {
+            int row = variablesTable.getSelectedRow();
+            String name = tableModel.variableKeyAt(row);
+            VariableExtractionRule rule = name == null ? null : rules.get(name);
+            if (rule == null || rule.getSavedRequestBase64() == null
+                    || rule.getSavedRequestBase64().isEmpty()) {
+                return "Automatic refresh requires a saved request.";
+            }
+            return null;
+        }
+        int row = variablesTable.getSelectedRow();
+        String name = tableModel.variableKeyAt(row);
+        VariableExtractionRule current = name == null ? null : rules.get(name);
+        if (current != null
+                && current.getMatchStrategy() != VariableExtractionRule.MatchStrategy.EXPLICIT) {
+            return null;
+        }
+        if (matchMethodField.getText().trim().isEmpty()
+                || matchHostField.getText().trim().isEmpty()
+                || parsePort(matchPortField.getText()) <= 0
+                || matchUrlField.getText().trim().isEmpty()) {
+            return "Explicit matching requires method, service, port, and path.";
+        }
+        if (pathModeComboBox.getSelectedIndex() == 1
+                && !ExtractionEngine.isValidRegex(matchUrlField.getText().trim())) {
+            return "The path regular expression is invalid.";
+        }
+        if (!queryField.getText().trim().isEmpty() && queryModeComboBox.getSelectedIndex() == 1
+                && !ExtractionEngine.isValidRegex(queryField.getText().trim())) {
+            return "The query regular expression is invalid.";
+        }
+        if (discriminatorSourceComboBox.getSelectedIndex() != 0
+                && !ExtractionEngine.isValidRegex(discriminatorRegexField.getText().trim())) {
+            return "The request discriminator regular expression is invalid.";
+        }
+        return null;
+    }
+
+    private int parsePort(String value) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private void setMatchFieldsEnabled(boolean enabled) {
+        if (matchMethodField == null) return;
+        matchMethodField.setEnabled(enabled);
+        matchHostField.setEnabled(enabled);
+        matchPortField.setEnabled(enabled);
+        matchSecureCheckBox.setEnabled(enabled);
+        pathModeComboBox.setEnabled(enabled);
+        matchUrlField.setEnabled(enabled);
+        queryModeComboBox.setEnabled(enabled);
+        queryField.setEnabled(enabled);
+        discriminatorSourceComboBox.setEnabled(enabled);
+        discriminatorRegexField.setEnabled(enabled);
+    }
+
+    private void convertActiveRuleToExplicitMatch() {
+        int selectedRow = variablesTable.getSelectedRow();
+        String name = tableModel.variableKeyAt(selectedRow);
+        if (name == null) return;
+        synchronized (lock) {
+            VariableExtractionRule rule = rules.get(name);
+            if (rule == null) return;
+            String method = "";
+            String host = rule.getSavedHost();
+            int port = rule.getSavedPort();
+            boolean secure = rule.isSavedSecure();
+            String path = rule.getMatchUrl();
+            try {
+                if (!rule.getSavedRequestBase64().isEmpty()) {
+                    HttpRequest request = HttpRequest.httpRequest(ByteArray.byteArray(
+                            Base64.getDecoder().decode(rule.getSavedRequestBase64())));
+                    method = request.method();
+                    String fullPath = request.path();
+                    int queryAt = fullPath.indexOf('?');
+                    path = queryAt < 0 ? fullPath : fullPath.substring(0, queryAt);
+                }
+            } catch (Exception error) {
+                api.logging().logToError("Could not convert legacy match for '" + name + "': "
+                        + error.getMessage());
+                return;
+            }
+            rule.configureExplicitMatch(method, host, port, secure, path,
+                    VariableExtractionRule.PatternMode.LITERAL, "",
+                    VariableExtractionRule.PatternMode.LITERAL,
+                    VariableExtractionRule.DiscriminatorSource.NONE, "");
+            rule.setEnabled(false);
+            rule.setAutomaticRefreshEnabled(false);
+            savePreferences();
+        }
+        updateDetailsPanel(selectedRow);
     }
 
     private void triggerSendToRepeater() {
@@ -1213,6 +1621,10 @@ public final class VariableManager {
         JComboBox<String> extractSrcCombo = new JComboBox<>(new String[]{
             text("Response Body"), text("Response Headers"), text("Request Body"), text("Request Headers")
         });
+        boolean requestContent = rule.getSource() != null && rule.getSource().startsWith("request_");
+        if ("request_headers".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(3);
+        else if ("request_body".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(2);
+        else if ("headers".equals(rule.getSource())) extractSrcCombo.setSelectedIndex(1);
         sgbc.gridx = 1; sgbc.weightx = 1.0;
         southPanel.add(extractSrcCombo, sgbc);
 
@@ -1226,24 +1638,26 @@ public final class VariableManager {
 
                 // Analyze source (headers vs body)
                 int doubleNewline = responseStr.indexOf("\r\n\r\n");
+                int separatorLength = 4;
                 if (doubleNewline < 0) {
                     doubleNewline = responseStr.indexOf("\n\n");
+                    separatorLength = 2;
                 }
 
-                String source = "body";
+                String source = requestContent ? "request_body" : "body";
                 String contextText = responseStr;
                 int contextStart = start;
                 int contextEnd = end;
 
                 if (doubleNewline >= 0) {
                     if (start < doubleNewline) {
-                        source = "headers";
+                        source = requestContent ? "request_headers" : "headers";
                         contextText = responseStr.substring(0, doubleNewline);
                     } else {
-                        source = "body";
-                        contextText = responseStr.substring(doubleNewline + 4);
-                        contextStart = Math.max(0, start - (doubleNewline + 4));
-                        contextEnd = Math.max(0, end - (doubleNewline + 4));
+                        source = requestContent ? "request_body" : "body";
+                        contextText = responseStr.substring(doubleNewline + separatorLength);
+                        contextStart = Math.max(0, start - (doubleNewline + separatorLength));
+                        contextEnd = Math.max(0, end - (doubleNewline + separatorLength));
                     }
                 }
 
@@ -1272,6 +1686,13 @@ public final class VariableManager {
                 JOptionPane.showMessageDialog(selectorDialog, text("Please select some text to generate a regex."), text("Error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
+            if (!ExtractionEngine.isValidRegex(finalRegex)
+                    || !ExtractionEngine.hasCaptureGroup(finalRegex)) {
+                JOptionPane.showMessageDialog(selectorDialog,
+                        text("The extraction regex must be valid and contain at least one capture group."),
+                        text("Error"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
             String chosenSource;
             switch (extractSrcCombo.getSelectedIndex()) {
                 case 1: chosenSource = "headers"; break;
@@ -1283,7 +1704,6 @@ public final class VariableManager {
             synchronized (lock) {
                 rule.setRegex(finalRegex);
                 rule.setSource(chosenSource);
-                rule.setEnabled(true);
                 savePreferences();
             }
             selectorDialog.dispose();
@@ -1393,8 +1813,18 @@ public final class VariableManager {
 
     // Synchronous execution (can block the calling thread)
     public void refreshVariableSynchronously(String name, VariableExtractionRule rule) throws Exception {
+        String refreshedValue = fetchRefreshedVariable(name, rule);
+        updateVariableValue(name, refreshedValue);
+    }
+
+    public String fetchRefreshedVariable(String name, VariableExtractionRule rule) throws Exception {
+        return fetchRefreshedVariable(name, rule, getVariables());
+    }
+
+    public String fetchRefreshedVariable(String name, VariableExtractionRule rule,
+                                         Map<String, String> variables) throws Exception {
         if (rule == null || rule.getSavedRequestBase64() == null || rule.getSavedRequestBase64().isEmpty()) {
-            return;
+            throw new Exception("No saved refresh request.");
         }
         
         byte[] requestBytes = Base64.getDecoder().decode(rule.getSavedRequestBase64());
@@ -1408,8 +1838,6 @@ public final class VariableManager {
         savedReq = savedReq.withService(service);
 
         // Replace placeholders in the refresh request template using current variables!
-        Map<String, String> variables = getVariables();
-
         // 1. Path replacement
         String path = savedReq.path();
         String newPath = replacePlaceholders(path, variables);
@@ -1475,7 +1903,7 @@ public final class VariableManager {
                 if (matcher.find() && matcher.groupCount() >= 1) {
                     String extractedValue = matcher.group(1);
                     if (extractedValue != null) {
-                        updateVariableValue(name, extractedValue);
+                        return extractedValue;
                     }
                 } else {
                     throw new Exception("Regex pattern did not match response.");
@@ -1486,6 +1914,7 @@ public final class VariableManager {
         } else {
             throw new Exception("No response received from target.");
         }
+        throw new Exception("Regex capture group did not produce a value.");
     }
 
     private String replacePlaceholders(String text, Map<String, String> variables) {
@@ -1496,7 +1925,7 @@ public final class VariableManager {
         synchronized (lock) {
             try {
                 synchronizeDefinitionsFromRuntimeMaps();
-                api.persistence().preferences().setString(STATE_V2_KEY,
+                api.persistence().preferences().setString(STATE_V3_KEY,
                         VariableStateCodec.encode(folders, definitions));
                 // Save variable values
                 StringBuilder valSb = new StringBuilder();
@@ -1529,6 +1958,14 @@ public final class VariableManager {
                 api.persistence().preferences().setString("repeater_variables_replacement_scanner_enabled", String.valueOf(replacementScannerEnabled));
                 api.persistence().preferences().setString("repeater_variables_replacement_proxy_enabled", String.valueOf(replacementProxyEnabled));
                 api.persistence().preferences().setString("repeater_variables_extraction_enabled", String.valueOf(extractionEnabled));
+                api.persistence().preferences().setString("dynamic_variables_session_recovery_enabled",
+                        String.valueOf(sessionRecoveryEnabled));
+                api.persistence().preferences().setString("dynamic_variables_extraction_debug_enabled",
+                        String.valueOf(extractionDebugEnabled));
+                api.persistence().preferences().setString("dynamic_variables_extraction_tools",
+                        AutomationTool.serialize(extractionTools));
+                api.persistence().preferences().setString("dynamic_variables_recovery_tools",
+                        AutomationTool.serialize(recoveryTools));
                 api.persistence().preferences().setString("repeater_variables_refresh_status_codes", refreshStatusCodes);
                 PlaceholderPreferences.save(api.persistence().preferences()::setString, getPlaceholderStyle());
                 PlaceholderPreferences.saveLanguage(api.persistence().preferences()::setString, uiLanguage);
@@ -1547,7 +1984,9 @@ public final class VariableManager {
                 folders.clear();
                 definitions.clear();
 
-                String stateV2 = api.persistence().preferences().getString(STATE_V2_KEY);
+                String stateV2 = api.persistence().preferences().getString(STATE_V3_KEY);
+                boolean migratingV2State = stateV2 == null || stateV2.isEmpty();
+                if (migratingV2State) stateV2 = api.persistence().preferences().getString(STATE_V2_KEY);
                 boolean loadedV2 = false;
                 if (stateV2 != null && !stateV2.isEmpty()) {
                     try {
@@ -1557,7 +1996,7 @@ public final class VariableManager {
                         rebuildRuntimeMapsFromDefinitions();
                         loadedV2 = true;
                     } catch (Exception stateError) {
-                        api.logging().logToError("Invalid v2 variable state; falling back to legacy preferences: "
+                        api.logging().logToError("Invalid variable state; falling back to legacy preferences: "
                                 + stateError.getMessage());
                     }
                 }
@@ -1599,7 +2038,7 @@ public final class VariableManager {
                     }
                 }
                     definitions.addAll(VariableStateCodec.migrateLegacy(variableNames, values, rules).variables());
-                    api.persistence().preferences().setString(STATE_V2_KEY,
+                    api.persistence().preferences().setString(STATE_V3_KEY,
                             VariableStateCodec.encode(folders, definitions));
                 }
 
@@ -1632,10 +2071,33 @@ public final class VariableManager {
                 if (extractEnabledPref != null) {
                     extractionEnabled = Boolean.parseBoolean(extractEnabledPref);
                 }
+                String recoveryEnabledPref = api.persistence().preferences().getString(
+                        "dynamic_variables_session_recovery_enabled");
+                sessionRecoveryEnabled = recoveryEnabledPref != null
+                        && Boolean.parseBoolean(recoveryEnabledPref);
+                String debugPref = api.persistence().preferences().getString(
+                        "dynamic_variables_extraction_debug_enabled");
+                extractionDebugEnabled = debugPref != null && Boolean.parseBoolean(debugPref);
+                String extractionToolsPref = api.persistence().preferences().getString(
+                        "dynamic_variables_extraction_tools");
+                extractionTools = extractionToolsPref == null
+                        ? EnumSet.of(AutomationTool.REPEATER)
+                        : AutomationTool.deserialize(extractionToolsPref);
+                String recoveryToolsPref = api.persistence().preferences().getString(
+                        "dynamic_variables_recovery_tools");
+                recoveryTools = recoveryToolsPref == null
+                        ? EnumSet.of(AutomationTool.REPEATER)
+                        : AutomationTool.deserialize(recoveryToolsPref);
                 
                 String codesPref = api.persistence().preferences().getString("repeater_variables_refresh_status_codes");
                 if (codesPref != null) {
                     refreshStatusCodes = codesPref;
+                }
+                validateLoadedRules();
+                if (migratingV2State && loadedV2) {
+                    synchronizeDefinitionsFromRuntimeMaps();
+                    api.persistence().preferences().setString(STATE_V3_KEY,
+                            VariableStateCodec.encode(folders, definitions));
                 }
                 VariableNames.PlaceholderStyle placeholderStyle = PlaceholderPreferences.load(
                         api.persistence().preferences()::getString, api.logging()::logToError);
@@ -1646,6 +2108,41 @@ public final class VariableManager {
                 if (ungroupedPref != null) ungroupedExpanded = Boolean.parseBoolean(ungroupedPref);
             } catch (Exception e) {
                 api.logging().logToError("Failed to load variables preferences: " + e.getMessage());
+            }
+        }
+    }
+
+    private void validateLoadedRules() {
+        for (Map.Entry<String, VariableExtractionRule> entry : rules.entrySet()) {
+            VariableExtractionRule rule = entry.getValue();
+            boolean valid = ExtractionEngine.isValidRegex(rule.getRegex())
+                    && ExtractionEngine.hasCaptureGroup(rule.getRegex());
+            if (valid && rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT) {
+                valid = !rule.getMatchMethod().isEmpty()
+                        && !rule.getMatchHost().isEmpty()
+                        && rule.getMatchPort() > 0
+                        && !rule.getMatchPath().isEmpty();
+                if (valid && rule.getPathMatchMode() == VariableExtractionRule.PatternMode.REGEX) {
+                    valid = ExtractionEngine.isValidRegex(rule.getMatchPath());
+                }
+                if (valid && !rule.getMatchQuery().isEmpty()
+                        && rule.getQueryMatchMode() == VariableExtractionRule.PatternMode.REGEX) {
+                    valid = ExtractionEngine.isValidRegex(rule.getMatchQuery());
+                }
+                if (valid && rule.getDiscriminatorSource()
+                        != VariableExtractionRule.DiscriminatorSource.NONE) {
+                    valid = ExtractionEngine.isValidRegex(rule.getDiscriminatorRegex());
+                }
+            } else if (valid && !rule.getMatchUrl().isEmpty()) {
+                valid = ExtractionEngine.isValidRegex(rule.getMatchUrl());
+            }
+            if (!valid && (rule.isEnabled() || rule.isAutomaticRefreshEnabled())) {
+                rule.setEnabled(false);
+                rule.setAutomaticRefreshEnabled(false);
+                VariableDefinition definition = findDefinitionByKey(entry.getKey());
+                if (definition != null) definition.setRule(rule);
+                api.logging().logToError("Disabled invalid automation rule for variable '"
+                        + entry.getKey() + "'.");
             }
         }
     }
