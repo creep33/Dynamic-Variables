@@ -699,7 +699,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
             String candidate = folderEditorText(folderComboBox);
             if (!VariableNames.isValidComponent(candidate)) {
                 JOptionPane.showMessageDialog(dialog,
-                        text("Folder") + text(" names cannot contain '.'."),
+                        text("Folder") + text(" names may only contain letters, numbers and _."),
                         text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
@@ -724,7 +724,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                         text("Duplicate Folder"), JOptionPane.ERROR_MESSAGE);
             } catch (IllegalArgumentException invalid) {
                 JOptionPane.showMessageDialog(dialog,
-                        text("Folder") + text(" names cannot contain '.'."),
+                        text("Folder") + text(" names may only contain letters, numbers and _."),
                         text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
             }
         });
@@ -1011,9 +1011,9 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 return;
             }
             String varName = selectedItem.toString().trim();
-            if (varName.contains(".")) {
+            if (!VariableNames.isValidComponent(varName)) {
                 dialogTabs.setSelectedIndex(0);
-                JOptionPane.showMessageDialog(dialog, text("Variable names cannot contain '.'. Choose the folder separately."), text("Error"), JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(dialog, text("Variable names may only contain letters, numbers and _."), text("Error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             String folderInput = folderEditorText(folderComboBox);
@@ -1023,7 +1023,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 if (!VariableNames.isValidComponent(folderInput)) {
                     dialogTabs.setSelectedIndex(0);
                     JOptionPane.showMessageDialog(dialog,
-                            text("Folder") + text(" names cannot contain '.'."),
+                            text("Folder") + text(" names may only contain letters, numbers and _."),
                             text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
@@ -1097,7 +1097,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                     if (folderName == null) return;
                 } catch (IllegalArgumentException invalid) {
                     JOptionPane.showMessageDialog(dialog,
-                            text("Folder") + text(" names cannot contain '.'."),
+                            text("Folder") + text(" names may only contain letters, numbers and _."),
                             text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
@@ -1440,7 +1440,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
             String candidate = entered.toString().trim();
             if (!VariableNames.isValidComponent(candidate)) {
                 JOptionPane.showMessageDialog(parent,
-                        text("Variable names cannot contain '.'. Choose the folder separately."),
+                        text("Variable names may only contain letters, numbers and _."),
                         text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
                 suggestion = candidate;
                 continue;

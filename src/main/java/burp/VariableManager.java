@@ -2848,12 +2848,20 @@ public final class VariableManager {
     }
 
     private boolean validNewName(String name, String type) {
+        return validNewName(name, type, mainPanel);
+    }
+
+    /**
+     * @param parent component the error is attached to. A modal dialog must pass itself: an error
+     *               parented to the main panel would be blocked behind it and never seen.
+     */
+    private boolean validNewName(String name, String type, Component parent) {
         if (name == null || name.trim().isEmpty()) {
-            JOptionPane.showMessageDialog(mainPanel, text(type) + text(" name cannot be empty."), text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(parent, text(type) + text(" name cannot be empty."), text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
             return false;
         }
         if (!VariableNames.isValidComponent(name)) {
-            JOptionPane.showMessageDialog(mainPanel, text(type) + text(" names cannot contain '.'."), text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(parent, text(type) + text(" names may only contain letters, numbers and _."), text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
             return false;
         }
         return true;
@@ -3047,7 +3055,7 @@ public final class VariableManager {
         JButton cancelButton = new JButton(text("Cancel"));
         createButton.addActionListener(e -> {
             String name = nameField.getText().trim();
-            if (!validNewName(name, "Variable")) return;
+            if (!validNewName(name, "Variable", dialog)) return;
 
             TotpGenerator.TotpConfig config = totpConfigFrom(secretField, digitsComboBox, periodField, algorithmComboBox);
             if (config == null || !config.isConfigured()) {
@@ -3230,13 +3238,16 @@ public final class VariableManager {
 
     private void renameNode(TableRow row) {
         if (row == null) return;
-        String oldName = row.folder != null ? row.folder.getName() : row.variable.getName();
-        String type = row.folder != null ? "Folder" : "Variable";
+        // Variable rows also carry their parent folder, so only folderRow tells them apart.
+        boolean folderRow = row.folderRow;
+        if (folderRow && row.folder == null) return;
+        String oldName = folderRow ? row.folder.getName() : row.variable.getName();
+        String type = folderRow ? "Folder" : "Variable";
         String name = JOptionPane.showInputDialog(mainPanel, text(type) + (uiLanguage == UiLanguage.SPANISH ? ":" : " name:"), oldName);
         if (name == null || oldName.equals(name.trim())) return;
         name = name.trim();
         if (!validNewName(name, type)) return;
-        if (row.folder != null) renameFolder(row.folder, name);
+        if (folderRow) renameFolder(row.folder, name);
         else renameVariable(row.variable, name);
     }
 

@@ -10,6 +10,7 @@ import java.util.regex.Pattern;
 
 final class VariableNames {
     private static final Pattern TAG = Pattern.compile("[A-Za-z][A-Za-z0-9_-]*");
+    private static final Pattern COMPONENT = Pattern.compile("[A-Za-z0-9_]+");
     private static final Map<PlaceholderStyle, Pattern> PLACEHOLDER_PATTERNS = new ConcurrentHashMap<>();
 
     enum PlaceholderSyntax {
@@ -51,8 +52,12 @@ final class VariableNames {
         }
     }
 
+    /**
+     * Folder and variable names end up inside placeholders and inside the qualified key, so they
+     * are restricted to characters that survive both untouched.
+     */
     static boolean isValidComponent(String name) {
-        return name != null && !name.trim().isEmpty() && !name.contains(".");
+        return name != null && COMPONENT.matcher(name.trim()).matches();
     }
 
     static boolean isValidTag(String tag) {

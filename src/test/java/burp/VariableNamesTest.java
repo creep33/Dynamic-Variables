@@ -21,9 +21,20 @@ class VariableNamesTest {
     void validatesNewFolderAndVariableComponents() {
         assertTrue(VariableNames.isValidComponent("alice"));
         assertTrue(VariableNames.isValidComponent("session_token"));
+        assertTrue(VariableNames.isValidComponent("A_1"));
+        assertTrue(VariableNames.isValidComponent("  padded  "));
         assertFalse(VariableNames.isValidComponent(null));
         assertFalse(VariableNames.isValidComponent("  "));
         assertFalse(VariableNames.isValidComponent("alice.token"));
+    }
+
+    @Test
+    void rejectsNamesOutsideTheAlphanumericAndUnderscoreCharset() {
+        assertFalse(VariableNames.isValidComponent("mi variable"));
+        assertFalse(VariableNames.isValidComponent("token-1"));
+        assertFalse(VariableNames.isValidComponent("contraseña"));
+        assertFalse(VariableNames.isValidComponent("token!"));
+        assertFalse(VariableNames.isValidComponent("{{token}}"));
     }
 
     @Test

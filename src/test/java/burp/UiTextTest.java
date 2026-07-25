@@ -57,6 +57,14 @@ class UiTextTest {
     }
 
     @Test
+    void translatesTheNameCharsetErrors() {
+        assertEquals(" solo puede contener letras, números y _ en el nombre.",
+                UiText.get(UiLanguage.SPANISH, " names may only contain letters, numbers and _."));
+        assertEquals("Los nombres de variable solo pueden contener letras, números y _.",
+                UiText.get(UiLanguage.SPANISH, "Variable names may only contain letters, numbers and _."));
+    }
+
+    @Test
     void translatesTheTwoFactorSetupDialog() {
         assertEquals("Configurar 2FA", UiText.get(UiLanguage.SPANISH, "Setup 2FA"));
         assertEquals("Secreto 2FA (Base32):",
