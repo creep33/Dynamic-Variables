@@ -48,10 +48,48 @@ class VariableStateCodecTest {
 
         VariableStateCodec.State decoded = VariableStateCodec.decode(versionTwo);
 
-        assertEquals("5", VariableStateCodec.VERSION);
+        assertEquals("6", VariableStateCodec.VERSION);
         assertEquals("token", decoded.variables().get(0).getName());
         assertEquals(VariableExtractionRule.MatchStrategy.LEGACY_PATH,
                 decoded.variables().get(0).getRule().getMatchStrategy());
+    }
+
+    @Test
+    void roundTripsTheTwoFactorConfiguration() {
+        VariableDefinition otp = new VariableDefinition("otp-id", "otp", null, "123456",
+                new VariableExtractionRule(), 0);
+        otp.setTotpConfig(new TotpGenerator.TotpConfig("GEZDGNBVGY3TQOJQ", 8, 60, "SHA256"));
+
+        VariableDefinition restored = VariableStateCodec.decode(
+                VariableStateCodec.encode(List.of(), List.of(otp))).variables().get(0);
+
+        assertTrue(restored.isTotpVariable());
+        assertEquals("GEZDGNBVGY3TQOJQ", restored.getTotpConfig().secret());
+        assertEquals(8, restored.getTotpConfig().digits());
+        assertEquals(60, restored.getTotpConfig().periodSeconds());
+        assertEquals("SHA256", restored.getTotpConfig().algorithm());
+    }
+
+    @Test
+    void readsVersionFiveVariablesWithoutATwoFactorColumn() {
+        VariableDefinition token = new VariableDefinition("id", "token", null, "value",
+                new VariableExtractionRule(), 0);
+        String versionSix = VariableStateCodec.encode(List.of(), List.of(token));
+
+        StringBuilder versionFive = new StringBuilder("5");
+        for (String line : versionSix.split("\n", -1)) {
+            if (line.isEmpty()) continue;
+            versionFive.append('\n').append(line.startsWith("V\t")
+                    ? line.substring(0, line.lastIndexOf('\t'))
+                    : line);
+        }
+
+        VariableDefinition restored = VariableStateCodec.decode(
+                versionFive.toString()).variables().get(0);
+
+        assertEquals("token", restored.getName());
+        assertEquals("value", restored.getValue());
+        assertFalse(restored.isTotpVariable());
     }
 
     @Test

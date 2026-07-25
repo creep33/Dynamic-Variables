@@ -113,7 +113,17 @@ public final class VariableManager {
     private JButton sendToRepeaterButton;
     private JButton editRequestButton;
 
+    private static final int DEFAULT_DIVIDER_LOCATION = 450;
+
     private boolean isUpdatingUI = false;
+    // Variable ids whose 2FA secret already failed to decode, so the error is logged once.
+    private final Set<String> loggedTotpFailures = new HashSet<>();
+
+    // 2FA-only details: the Automation tab is removed and the Value tab gains a manual rotation.
+    private JLabel valueHint;
+    private JPanel totpValuePanel;
+    private JButton rotateTotpButton;
+    private JPanel automationDetailsPanel;
 
     public VariableManager(MontoyaApi api) {
         this.api = api;
@@ -127,7 +137,31 @@ public final class VariableManager {
 
     public Map<String, String> getVariables() {
         synchronized (lock) {
+            refreshTotpValues();
             return new HashMap<>(values);
+        }
+    }
+
+    /**
+     * Recomputes 2FA values right before they are read. Every consumer of a variable value
+     * goes through {@link #getVariables()}, so a code is refreshed exactly when it is used
+     * and only if its time step advanced - no background rotation.
+     */
+    private void refreshTotpValues() {
+        long epochSeconds = System.currentTimeMillis() / 1000L;
+        for (VariableDefinition definition : definitions) {
+            if (!definition.isTotpVariable()) continue;
+            try {
+                String code = definition.totpCodeFor(epochSeconds);
+                if (!code.equals(definition.getValue())) definition.setValue(code);
+                values.put(qualifiedName(definition), code);
+            } catch (RuntimeException e) {
+                // A stored secret that no longer decodes must never break request handling.
+                if (loggedTotpFailures.add(definition.getId())) {
+                    api.logging().logToError("Cannot compute the 2FA code for "
+                            + qualifiedName(definition) + ": " + e.getMessage());
+                }
+            }
         }
     }
 
@@ -559,7 +593,6 @@ public final class VariableManager {
 
         // --- CENTER SPLIT PANE ---
         JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
-        splitPane.setDividerLocation(450);
         splitPane.setResizeWeight(0.4);
 
         // Left Side: Variables Table & Buttons
@@ -672,7 +705,7 @@ public final class VariableManager {
         JButton moreButton = new JButton(text("More..."));
 
         addFolderButton.addActionListener(e -> createFolderDialog());
-        addButton.addActionListener(e -> createVariableDialog(selectedFolderId()));
+        addButton.addActionListener(e -> createVariableDialog(null));
 
         deleteButton.addActionListener(e -> deleteSelectedNodes());
 
@@ -693,7 +726,13 @@ public final class VariableManager {
                 clearRuleFields();
             }
         });
+        JMenuItem setupTotpItem = new JMenuItem(text("Setup 2FA"));
+        setupTotpItem.setToolTipText(text("Creates a variable whose value is a 2FA code computed from a secret."));
+        setupTotpItem.addActionListener(e -> showTotpSetupDialog(selectedFolderId()));
+
         JPopupMenu moreMenu = new JPopupMenu();
+        moreMenu.add(setupTotpItem);
+        moreMenu.addSeparator();
         moreMenu.add(clearAllItem);
         moreButton.addActionListener(e -> moreMenu.show(moreButton, 0, moreButton.getHeight()));
 
@@ -702,6 +741,13 @@ public final class VariableManager {
         buttonPanel.add(deleteButton);
         buttonPanel.add(moreButton);
         leftPanel.add(buttonPanel, BorderLayout.SOUTH);
+
+        // The button row is what decides how narrow this side may get: without a minimum the
+        // split pane opens on the table's preferred width and clips "More...".
+        int leftPanelMinimumWidth = buttonPanel.getPreferredSize().width + 20;
+        leftPanel.setMinimumSize(new Dimension(leftPanelMinimumWidth, 150));
+        leftPanel.setPreferredSize(new Dimension(
+                Math.max(leftPanelMinimumWidth, DEFAULT_DIVIDER_LOCATION), 400));
 
         // 1. Current Value JTextArea
         JPanel valuePanel = new JPanel(new BorderLayout(5, 5));
@@ -712,10 +758,24 @@ public final class VariableManager {
                 TitledBorder.TOP,
                 new Font(mainPanel.getFont().getName(), Font.BOLD, 12)
         ));
-        JLabel valueHint = new JLabel(text("Changes are saved automatically."));
+        valueHint = new JLabel(text("Changes are saved automatically."));
         valueHint.setForeground(UIManager.getColor("Label.disabledForeground"));
         valueHint.setBorder(new EmptyBorder(0, 4, 4, 0));
-        valuePanel.add(valueHint, BorderLayout.NORTH);
+
+        // Only shown for 2FA variables: the value is derived from the secret, so the panel
+        // explains the rotation and offers an explicit recompute above the hint.
+        totpValuePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 2));
+        rotateTotpButton = new JButton(text("Rotate now"));
+        rotateTotpButton.setToolTipText(text(
+                "Recomputes the code now. The code only changes when its period elapses."));
+        rotateTotpButton.addActionListener(e -> rotateSelectedTotpValue());
+        totpValuePanel.add(rotateTotpButton);
+        totpValuePanel.setVisible(false);
+
+        JPanel valueHeaderPanel = new JPanel(new BorderLayout());
+        valueHeaderPanel.add(totpValuePanel, BorderLayout.NORTH);
+        valueHeaderPanel.add(valueHint, BorderLayout.SOUTH);
+        valuePanel.add(valueHeaderPanel, BorderLayout.NORTH);
         valueTextArea = new JTextArea(5, 20);
         valueTextArea.setLineWrap(true);
         valueTextArea.setWrapStyleWord(true);
@@ -1045,6 +1105,7 @@ public final class VariableManager {
         ruleScrollPane.setBorder(null);
         ruleScrollPane.getVerticalScrollBar().setUnitIncrement(16);
         automationDetails.add(ruleScrollPane, BorderLayout.CENTER);
+        automationDetailsPanel = automationDetails;
         detailsTabs.addTab(text("Automation"), automationDetails);
 
         JPanel emptyDetailsPanel = new JPanel(new GridBagLayout());
@@ -1068,6 +1129,20 @@ public final class VariableManager {
 
         splitPane.setLeftComponent(leftPanel);
         splitPane.setRightComponent(detailsCards);
+        // The divider must be placed once the split pane has both components and a real size:
+        // setting it before Burp shows the tab is discarded on the first layout pass.
+        int initialDividerLocation = Math.max(
+                leftPanel.getPreferredSize().width, DEFAULT_DIVIDER_LOCATION);
+        splitPane.setDividerLocation(initialDividerLocation);
+        splitPane.addHierarchyListener(new java.awt.event.HierarchyListener() {
+            @Override
+            public void hierarchyChanged(java.awt.event.HierarchyEvent event) {
+                if ((event.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) == 0) return;
+                if (!splitPane.isShowing()) return;
+                splitPane.removeHierarchyListener(this);
+                SwingUtilities.invokeLater(() -> splitPane.setDividerLocation(initialDividerLocation));
+            }
+        });
         mainPanel.add(splitPane, BorderLayout.CENTER);
 
         // --- FOOTER INSTRUCTIONS ---
@@ -1340,6 +1415,7 @@ public final class VariableManager {
         if (selectedRow < 0) {
             if (detailsCardLayout != null) detailsCardLayout.show(detailsCards, "empty");
             setAdvancedMatchingExpanded(false);
+            setTotpDetailsVisible(false);
             isUpdatingUI = true;
             valueTextArea.setText("");
             valueTextArea.setEnabled(false);
@@ -1381,16 +1457,24 @@ public final class VariableManager {
         String val = values.getOrDefault(name, "");
         VariableExtractionRule rule = rules.getOrDefault(name, new VariableExtractionRule());
 
+        VariableDefinition selectedDefinition = findDefinitionByKey(name);
+        // A 2FA variable owns its value: it is computed from the secret on every use, and it
+        // is never extracted from a response nor replayed during session recovery.
+        boolean totpVariable = selectedDefinition != null && selectedDefinition.isTotpVariable();
+
+        setTotpDetailsVisible(totpVariable);
+
         isUpdatingUI = true;
         valueTextArea.setText(val);
-        valueTextArea.setEnabled(true);
+        valueTextArea.setEnabled(!totpVariable);
+        valueTextArea.setToolTipText(totpVariable ? text("Computed from the 2FA secret.") : null);
 
-        ruleEnabledCheckBox.setEnabled(true);
-        ruleEnabledCheckBox.setSelected(rule.isEnabled());
-        automaticRefreshCheckBox.setEnabled(true);
-        automaticRefreshCheckBox.setSelected(rule.isAutomaticRefreshEnabled());
-        allowNonIdempotentReplayCheckBox.setEnabled(true);
-        allowNonIdempotentReplayCheckBox.setSelected(rule.isAllowNonIdempotentReplay());
+        ruleEnabledCheckBox.setEnabled(!totpVariable);
+        ruleEnabledCheckBox.setSelected(!totpVariable && rule.isEnabled());
+        automaticRefreshCheckBox.setEnabled(!totpVariable);
+        automaticRefreshCheckBox.setSelected(!totpVariable && rule.isAutomaticRefreshEnabled());
+        allowNonIdempotentReplayCheckBox.setEnabled(!totpVariable);
+        allowNonIdempotentReplayCheckBox.setSelected(!totpVariable && rule.isAllowNonIdempotentReplay());
 
         boolean explicit = rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT;
         setAdvancedMatchingExpanded(!explicit || rule.isAllowNonIdempotentReplay());
@@ -2658,6 +2742,58 @@ public final class VariableManager {
                 rule.getValueTemplate(), rule.getTargets());
     }
 
+    /**
+     * 2FA variables have no automation at all: their value comes from the secret, never from a
+     * response, so the Automation tab is removed instead of just disabled.
+     */
+    private void setTotpDetailsVisible(boolean totpVariable) {
+        if (detailsTabs == null || automationDetailsPanel == null) return;
+        valueHint.setText(totpVariable
+                ? text("The value rotates automatically every time it is used.")
+                : text("Changes are saved automatically."));
+        totpValuePanel.setVisible(totpVariable);
+
+        int automationIndex = detailsTabs.indexOfComponent(automationDetailsPanel);
+        if (totpVariable) {
+            if (automationIndex >= 0) detailsTabs.removeTabAt(automationIndex);
+        } else if (automationIndex < 0) {
+            detailsTabs.addTab(text("Automation"), automationDetailsPanel);
+        }
+    }
+
+    private void rotateSelectedTotpValue() {
+        int selectedRow = variablesTable.getSelectedRow();
+        String name = tableModel.variableKeyAt(selectedRow);
+        if (name == null) return;
+
+        String code;
+        int secondsLeft;
+        synchronized (lock) {
+            VariableDefinition definition = findDefinitionByKey(name);
+            if (definition == null || !definition.isTotpVariable()) return;
+            long epochSeconds = System.currentTimeMillis() / 1000L;
+            try {
+                code = definition.totpCodeFor(epochSeconds);
+            } catch (RuntimeException e) {
+                JOptionPane.showMessageDialog(mainPanel,
+                        text("Invalid 2FA secret. Use Base32 characters (A-Z, 2-7)."),
+                        text("Error"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            secondsLeft = TotpGenerator.secondsRemaining(
+                    epochSeconds, definition.getTotpConfig().periodSeconds());
+            definition.setValue(code);
+            values.put(name, code);
+            savePreferences();
+        }
+
+        isUpdatingUI = true;
+        valueTextArea.setText(code);
+        isUpdatingUI = false;
+        tableModel.fireTableCellUpdated(selectedRow, 1);
+        showTemporaryStatus(text("Current code:") + " " + code + " (" + secondsLeft + "s)");
+    }
+
     private void disableDetails(String message) {
         updateDetailsPanel(-1);
         savedRequestLabel.setText(message);
@@ -2748,14 +2884,52 @@ public final class VariableManager {
         tableModel.fireTableDataChanged();
     }
 
-    private void createVariableDialog(String folderId) {
-        String name = JOptionPane.showInputDialog(mainPanel, text("Variable name:"), text("New Variable"), JOptionPane.PLAIN_MESSAGE);
-        if (name == null) return;
-        name = name.trim();
+    /**
+     * @param preselectedFolderId folder to start on, or {@code null} to start on Ungrouped.
+     *                            The table's context menu passes the folder that was clicked.
+     */
+    private void createVariableDialog(String preselectedFolderId) {
+        // Same shape as the 2FA setup dialog: pick an existing folder and type a name.
+        // Folders are created from "New Folder", never from here.
+        JPanel form = new JPanel(new GridBagLayout());
+        // Painting its own background would frame the fields with Panel.background, which does
+        // not match the option pane behind it under Burp's dark theme.
+        form.setOpaque(false);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(4, 5, 4, 5);
+
+        JComboBox<String> folderComboBox = new JComboBox<>();
+        folderComboBox.addItem(text("Ungrouped"));
+        for (String folderName : getFolderNames()) folderComboBox.addItem(folderName);
+        VariableFolder preselectedFolder = findFolder(preselectedFolderId);
+        if (preselectedFolder != null) folderComboBox.setSelectedItem(preselectedFolder.getName());
+        JTextField nameField = new JTextField(20);
+
+        gbc.gridy = 0; gbc.gridx = 0; gbc.weightx = 0.0;
+        form.add(new JLabel(text("Folder:")), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        form.add(folderComboBox, gbc);
+
+        gbc.gridy = 1; gbc.gridx = 0; gbc.weightx = 0.0;
+        form.add(new JLabel(text("Variable name:")), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        form.add(nameField, gbc);
+
+        int choice = JOptionPane.showConfirmDialog(mainPanel, form, text("New Variable"),
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) return;
+
+        String name = nameField.getText().trim();
         if (!validNewName(name, "Variable")) return;
-        VariableFolder folder = findFolder(folderId);
-        String key = folder == null ? name : folder.getName() + "." + name;
+
+        String folderName = folderComboBox.getSelectedIndex() <= 0
+                ? "" : String.valueOf(folderComboBox.getSelectedItem());
+        String key;
         synchronized (lock) {
+            VariableFolder folder = folderName.isEmpty() ? null : findFolderByName(folderName);
+            String folderId = folder == null ? null : folder.getId();
+            key = qualifyVariableName(folderName, name);
             if (values.containsKey(key)) {
                 JOptionPane.showMessageDialog(mainPanel, text("Variable '") + key + text("' already exists."), text("Duplicate Variable"), JOptionPane.ERROR_MESSAGE);
                 return;
@@ -2768,6 +2942,187 @@ public final class VariableManager {
         }
         tableModel.fireTableDataChanged();
         selectVariable(key);
+    }
+
+    private void showTotpSetupDialog(String preselectedFolderId) {
+        Frame suiteFrame = api.userInterface().swingUtils().suiteFrame();
+        JDialog dialog = new JDialog(suiteFrame, text("Setup 2FA"), Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.setLayout(new BorderLayout(10, 10));
+
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setBorder(new EmptyBorder(12, 15, 5, 15));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(4, 5, 4, 5);
+
+        List<String> folderNames;
+        synchronized (lock) {
+            folderNames = folders.stream().sorted(Comparator.comparingInt(VariableFolder::getPosition))
+                    .map(VariableFolder::getName).toList();
+        }
+        JComboBox<String> folderComboBox = new JComboBox<>();
+        folderComboBox.addItem(text("Ungrouped"));
+        for (String folderName : folderNames) folderComboBox.addItem(folderName);
+        VariableFolder preselected = findFolder(preselectedFolderId);
+        if (preselected != null) folderComboBox.setSelectedItem(preselected.getName());
+
+        JTextField nameField = new JTextField(24);
+        JTextField secretField = new JTextField(24);
+
+        gbc.gridy = 0; gbc.gridx = 0; gbc.weightx = 0.0;
+        form.add(new JLabel(text("Folder:")), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        form.add(folderComboBox, gbc);
+
+        gbc.gridy = 1; gbc.gridx = 0; gbc.weightx = 0.0;
+        form.add(new JLabel(text("Variable name:")), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        form.add(nameField, gbc);
+
+        gbc.gridy = 2; gbc.gridx = 0; gbc.weightx = 0.0;
+        form.add(new JLabel(text("2FA Secret (Base32):")), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        form.add(secretField, gbc);
+
+        // Advanced settings stay collapsed: SHA1 / 6 digits / 30 s covers almost every service.
+        JCheckBox advancedCheckBox = new JCheckBox(text("Advanced"));
+        JPanel advancedPanel = new JPanel(new GridBagLayout());
+        advancedPanel.setVisible(false);
+        GridBagConstraints agbc = new GridBagConstraints();
+        agbc.fill = GridBagConstraints.HORIZONTAL;
+        agbc.insets = new Insets(4, 5, 4, 5);
+
+        JComboBox<String> digitsComboBox = new JComboBox<>(new String[]{"6", "7", "8"});
+        JTextField periodField = new JTextField(String.valueOf(TotpGenerator.DEFAULT_PERIOD_SECONDS), 6);
+        JComboBox<String> algorithmComboBox = new JComboBox<>(new String[]{"SHA1", "SHA256", "SHA512"});
+
+        agbc.gridy = 0; agbc.gridx = 0; agbc.weightx = 0.0;
+        advancedPanel.add(new JLabel(text("Digits:")), agbc);
+        agbc.gridx = 1; agbc.weightx = 1.0;
+        advancedPanel.add(digitsComboBox, agbc);
+        agbc.gridy = 1; agbc.gridx = 0; agbc.weightx = 0.0;
+        advancedPanel.add(new JLabel(text("Period (seconds):")), agbc);
+        agbc.gridx = 1; agbc.weightx = 1.0;
+        advancedPanel.add(periodField, agbc);
+        agbc.gridy = 2; agbc.gridx = 0; agbc.weightx = 0.0;
+        advancedPanel.add(new JLabel(text("Algorithm:")), agbc);
+        agbc.gridx = 1; agbc.weightx = 1.0;
+        advancedPanel.add(algorithmComboBox, agbc);
+
+        gbc.gridy = 3; gbc.gridx = 0; gbc.gridwidth = 2;
+        form.add(advancedCheckBox, gbc);
+        gbc.gridy = 4;
+        form.add(advancedPanel, gbc);
+
+        JLabel previewLabel = new JLabel(" ");
+        gbc.gridy = 5;
+        form.add(previewLabel, gbc);
+        gbc.gridwidth = 1;
+
+        advancedCheckBox.addActionListener(e -> {
+            advancedPanel.setVisible(advancedCheckBox.isSelected());
+            dialog.pack();
+        });
+
+        // Preview runs on the EDT only: no I/O, and the timer is stopped when the dialog closes.
+        SimpleCallback updatePreview = () -> {
+            TotpGenerator.TotpConfig config = totpConfigFrom(secretField, digitsComboBox, periodField, algorithmComboBox);
+            if (config == null || !config.isConfigured()) {
+                previewLabel.setText(" ");
+                return;
+            }
+            long epochSeconds = System.currentTimeMillis() / 1000L;
+            try {
+                previewLabel.setText(text("Current code:") + " " + TotpGenerator.code(config, epochSeconds)
+                        + "  (" + TotpGenerator.secondsRemaining(epochSeconds, config.periodSeconds()) + "s)");
+            } catch (RuntimeException ex) {
+                previewLabel.setText(text("Invalid 2FA secret. Use Base32 characters (A-Z, 2-7)."));
+            }
+        };
+        javax.swing.Timer previewTimer = new javax.swing.Timer(1000, e -> updatePreview.run());
+        previewTimer.setCoalesce(true);
+        secretField.getDocument().addDocumentListener(new SimpleDocumentListener(updatePreview));
+
+        JButton createButton = new JButton(text("Create"));
+        JButton cancelButton = new JButton(text("Cancel"));
+        createButton.addActionListener(e -> {
+            String name = nameField.getText().trim();
+            if (!validNewName(name, "Variable")) return;
+
+            TotpGenerator.TotpConfig config = totpConfigFrom(secretField, digitsComboBox, periodField, algorithmComboBox);
+            if (config == null || !config.isConfigured()) {
+                JOptionPane.showMessageDialog(dialog,
+                        text("Invalid 2FA secret. Use Base32 characters (A-Z, 2-7)."),
+                        text("Error"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            String initialCode;
+            try {
+                initialCode = TotpGenerator.code(config, System.currentTimeMillis() / 1000L);
+            } catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(dialog,
+                        text("Invalid 2FA secret. Use Base32 characters (A-Z, 2-7)."),
+                        text("Error"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            String folderName = folderComboBox.getSelectedIndex() <= 0
+                    ? "" : String.valueOf(folderComboBox.getSelectedItem());
+            String key;
+            synchronized (lock) {
+                VariableFolder folder = folderName.isEmpty() ? null : findFolderByName(folderName);
+                String folderId = folder == null ? null : folder.getId();
+                key = qualifyVariableName(folderName, name);
+                if (values.containsKey(key)) {
+                    JOptionPane.showMessageDialog(dialog,
+                            text("Variable '") + key + text("' already exists."),
+                            text("Duplicate Variable"), JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                VariableDefinition definition = new VariableDefinition(name, folderId, initialCode,
+                        new VariableExtractionRule(), countVariablesInFolder(folderId));
+                definition.setTotpConfig(config);
+                definitions.add(definition);
+                rebuildRuntimeMapsFromDefinitions();
+                savePreferences();
+            }
+            previewTimer.stop();
+            dialog.dispose();
+            tableModel.fireTableDataChanged();
+            selectVariable(key);
+        });
+        cancelButton.addActionListener(e -> {
+            previewTimer.stop();
+            dialog.dispose();
+        });
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
+        buttons.add(createButton);
+        buttons.add(cancelButton);
+
+        dialog.add(form, BorderLayout.CENTER);
+        dialog.add(buttons, BorderLayout.SOUTH);
+        dialog.pack();
+        dialog.setLocationRelativeTo(suiteFrame);
+        previewTimer.start();
+        dialog.setVisible(true);
+        previewTimer.stop();
+    }
+
+    private TotpGenerator.TotpConfig totpConfigFrom(JTextField secretField, JComboBox<String> digitsComboBox,
+                                                    JTextField periodField, JComboBox<String> algorithmComboBox) {
+        String secret = secretField.getText().trim();
+        if (secret.isEmpty()) return null;
+        int digits = Integer.parseInt(String.valueOf(digitsComboBox.getSelectedItem()));
+        int period;
+        try {
+            period = Integer.parseInt(periodField.getText().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (period <= 0) return null;
+        return new TotpGenerator.TotpConfig(secret, digits, period,
+                String.valueOf(algorithmComboBox.getSelectedItem()));
     }
 
     private void selectVariable(String key) {
@@ -3258,6 +3613,9 @@ public final class VariableManager {
                         String val = values.getOrDefault(name, "");
                         return val.length() > 50 ? val.substring(0, 47) + "..." : val;
                     case 2:
+                        // A 2FA variable always refreshes itself from its secret, so it is
+                        // auto-updating by definition even without an extraction rule.
+                        if (row.variable.isTotpVariable()) return text("Yes");
                         VariableExtractionRule rule = rules.get(name);
                         return (rule != null && rule.isEnabled()) ? text("Yes") : text("No");
                 }

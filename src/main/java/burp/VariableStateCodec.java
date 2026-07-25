@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 final class VariableStateCodec {
-    static final String VERSION = "5";
+    static final String VERSION = "6";
 
     record State(List<VariableFolder> folders, List<VariableDefinition> variables) {}
 
@@ -26,7 +26,8 @@ final class VariableStateCodec {
                     .append(enc(variable.getName())).append('\t')
                     .append(enc(variable.getFolderId() == null ? "" : variable.getFolderId())).append('\t')
                     .append(variable.getPosition()).append('\t').append(enc(variable.getValue())).append('\t')
-                    .append(enc(variable.getRule().serialize())).append('\n');
+                    .append(enc(variable.getRule().serialize())).append('\t')
+                    .append(encodeTotp(variable.getTotpConfig())).append('\n');
         }
         return out.toString();
     }
@@ -34,8 +35,8 @@ final class VariableStateCodec {
     static State decode(String data) {
         if (data == null || data.isEmpty()) return new State(new ArrayList<>(), new ArrayList<>());
         String[] lines = data.split("\\n", -1);
-        if (lines.length == 0 || !(VERSION.equals(lines[0]) || "4".equals(lines[0])
-                || "3".equals(lines[0]) || "2".equals(lines[0]))) {
+        if (lines.length == 0 || !(VERSION.equals(lines[0]) || "5".equals(lines[0])
+                || "4".equals(lines[0]) || "3".equals(lines[0]) || "2".equals(lines[0]))) {
             throw new IllegalArgumentException("Unsupported variable state version");
         }
         List<VariableFolder> folders = new ArrayList<>();
@@ -46,11 +47,14 @@ final class VariableStateCodec {
             if ("F".equals(parts[0]) && parts.length == 5) {
                 folders.add(new VariableFolder(dec(parts[1]), dec(parts[2]),
                         Integer.parseInt(parts[3]), Boolean.parseBoolean(parts[4])));
-            } else if ("V".equals(parts[0]) && parts.length == 7) {
+            } else if ("V".equals(parts[0]) && (parts.length == 7 || parts.length == 8)) {
                 String folderId = dec(parts[3]);
-                variables.add(new VariableDefinition(dec(parts[1]), dec(parts[2]),
+                VariableDefinition variable = new VariableDefinition(dec(parts[1]), dec(parts[2]),
                         folderId.isEmpty() ? null : folderId, dec(parts[5]),
-                        VariableExtractionRule.deserialize(dec(parts[6])), Integer.parseInt(parts[4])));
+                        VariableExtractionRule.deserialize(dec(parts[6])), Integer.parseInt(parts[4]));
+                // Version 6 appends the 2FA configuration; older lines simply have no secret.
+                if (parts.length == 8) variable.setTotpConfig(decodeTotp(parts[7]));
+                variables.add(variable);
             }
         }
         return new State(folders, variables);
@@ -65,6 +69,24 @@ final class VariableStateCodec {
                     rules.getOrDefault(name, new VariableExtractionRule()), i));
         }
         return new State(new ArrayList<>(), variables);
+    }
+
+    private static String encodeTotp(TotpGenerator.TotpConfig config) {
+        if (config == null || !config.isConfigured()) return "";
+        return String.join(":", enc(config.secret()), Integer.toString(config.digits()),
+                Integer.toString(config.periodSeconds()), enc(config.algorithm()));
+    }
+
+    private static TotpGenerator.TotpConfig decodeTotp(String encoded) {
+        if (encoded == null || encoded.isEmpty()) return TotpGenerator.TotpConfig.empty();
+        String[] parts = encoded.split(":", -1);
+        if (parts.length != 4) return TotpGenerator.TotpConfig.empty();
+        try {
+            return new TotpGenerator.TotpConfig(dec(parts[0]), Integer.parseInt(parts[1]),
+                    Integer.parseInt(parts[2]), dec(parts[3]));
+        } catch (NumberFormatException e) {
+            return TotpGenerator.TotpConfig.empty();
+        }
     }
 
     private static String enc(String value) {

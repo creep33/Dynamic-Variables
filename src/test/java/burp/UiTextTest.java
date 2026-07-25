@@ -57,6 +57,22 @@ class UiTextTest {
     }
 
     @Test
+    void translatesTheTwoFactorSetupDialog() {
+        assertEquals("Configurar 2FA", UiText.get(UiLanguage.SPANISH, "Setup 2FA"));
+        assertEquals("Secreto 2FA (Base32):",
+                UiText.get(UiLanguage.SPANISH, "2FA Secret (Base32):"));
+        assertEquals("Código actual:", UiText.get(UiLanguage.SPANISH, "Current code:"));
+        assertEquals("Secreto 2FA no válido. Usa caracteres Base32 (A-Z, 2-7).",
+                UiText.get(UiLanguage.SPANISH, "Invalid 2FA secret. Use Base32 characters (A-Z, 2-7)."));
+        assertEquals("Calculado a partir del secreto 2FA.",
+                UiText.get(UiLanguage.SPANISH, "Computed from the 2FA secret."));
+        assertEquals("Setup 2FA", UiText.get(UiLanguage.ENGLISH, "Setup 2FA"));
+        assertEquals("El valor rota automáticamente cada vez que se usa.",
+                UiText.get(UiLanguage.SPANISH, "The value rotates automatically every time it is used."));
+        assertEquals("Rotar ahora", UiText.get(UiLanguage.SPANISH, "Rotate now"));
+    }
+
+    @Test
     void translatesProgressiveDisclosureControls() {
         assertEquals("Automatización",
                 UiText.get(UiLanguage.SPANISH, "Automation"));
