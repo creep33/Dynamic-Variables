@@ -92,4 +92,31 @@ class UiTextTest {
         assertEquals("Selecciona una variable",
                 UiText.get(UiLanguage.SPANISH, "Select a variable"));
     }
+
+    @Test
+    void translatesTheSessionExpirySignalControls() {
+        assertEquals("Señal de expiración de sesión",
+                UiText.get(UiLanguage.SPANISH, "Session expiry signal"));
+        assertEquals("Códigos de estado de expiración:",
+                UiText.get(UiLanguage.SPANISH, "Expiry status codes:"));
+        assertEquals("Filtro de cabecera de respuesta:",
+                UiText.get(UiLanguage.SPANISH, "Response header filter:"));
+        assertEquals("Filtro de cuerpo de respuesta:",
+                UiText.get(UiLanguage.SPANISH, "Response body filter:"));
+        assertEquals("La sesión ha expirado cuando el filtro NO casa",
+                UiText.get(UiLanguage.SPANISH,
+                        "The session is expired when the filter does NOT match"));
+        assertEquals("Deja todos los campos vacíos para usar los códigos de estado globales.",
+                UiText.get(UiLanguage.SPANISH,
+                        "Leave every field empty to use the global refresh status codes."));
+        assertEquals("Opcional. Se busca dentro del bloque de cabeceras de la respuesta. Vacío no filtra.",
+                UiText.get(UiLanguage.SPANISH,
+                        "Optional. Searched inside the response header block. Empty does not filter."));
+        assertEquals("Opcional. Se busca dentro del cuerpo de la respuesta. Vacío no filtra.",
+                UiText.get(UiLanguage.SPANISH,
+                        "Optional. Searched inside the response body. Empty does not filter."));
+        assertEquals("Los códigos distintos de 401 y 403 requieren un filtro de cabecera o cuerpo; esta señal se ignora.",
+                UiText.get(UiLanguage.SPANISH,
+                        "Codes other than 401 and 403 require a header or body filter; this signal is ignored."));
+    }
 }

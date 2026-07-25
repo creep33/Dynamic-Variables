@@ -85,7 +85,7 @@ public class VariableHttpHandler implements HttpHandler {
         HttpRequest initiatingRequest = response.initiatingRequest();
         if (tool != null && initiatingRequest != null) {
             runPassiveExtraction(messageId, tool, trace, initiatingRequest,
-                    response.headers(), response.bodyToString());
+                    response.statusCode(), response.headers(), response.bodyToString());
         }
 
         if (trace == null || tool == null) return ResponseReceivedAction.continueWith(response);
@@ -111,8 +111,8 @@ public class VariableHttpHandler implements HttpHandler {
     }
 
     private void runPassiveExtraction(int messageId, AutomationTool tool, RequestTrace trace,
-                                      HttpRequest request, List<HttpHeader> responseHeaders,
-                                      String responseBody) {
+                                      HttpRequest request, int responseStatusCode,
+                                      List<HttpHeader> responseHeaders, String responseBody) {
         if (!variableManager.isExtractionEnabled()) {
             debug(messageId, null, ExtractionOutcome.GLOBAL_DISABLED);
             return;
@@ -127,7 +127,7 @@ public class VariableHttpHandler implements HttpHandler {
         Map<String, String> variables = variableManager.getVariables();
         ExtractionEngine.RequestSnapshot requestSnapshot = snapshot(request);
         ExtractionEngine.ResponseSnapshot responseSnapshot = new ExtractionEngine.ResponseSnapshot(
-                headerLines(responseHeaders), responseBody);
+                responseStatusCode, headerLines(responseHeaders), responseBody);
         Map<String, VariableExtractionRule> matched = new LinkedHashMap<>();
         Set<String> contexts = new LinkedHashSet<>();
 
@@ -189,16 +189,10 @@ public class VariableHttpHandler implements HttpHandler {
     private ResponseReceivedAction recoverSessionIfAuthorized(HttpResponseReceived response, RequestTrace trace) {
         boolean globalEnabled = variableManager.isSessionRecoveryEnabled();
         boolean toolEnabled = variableManager.isRecoveryToolEnabled(trace.tool());
-        boolean configuredStatus = variableManager.getRefreshStatusCodes().contains((int) response.statusCode());
         boolean hasTemplate = trace.originalTemplate() != null;
         boolean hasVariables = !trace.variablesUsed().isEmpty();
-        if (!AutomationPolicy.canAttemptRecovery(
-                globalEnabled, toolEnabled, configuredStatus, hasTemplate, hasVariables)) {
-            if (globalEnabled && !toolEnabled) {
-                debug(response.messageId(), null, ExtractionOutcome.TOOL_DISABLED);
-            }
-            return ResponseReceivedAction.continueWith(response);
-        }
+
+        // The refresh candidates are resolved first because expiry signals live on the rules.
         Map<String, VariableExtractionRule> allRules = variableManager.getRules();
         Map<String, VariableExtractionRule> refreshRules = new LinkedHashMap<>();
         for (String variable : trace.variablesUsed()) {
@@ -206,6 +200,18 @@ public class VariableHttpHandler implements HttpHandler {
             if (AutomationPolicy.isRefreshCandidate(rule)) {
                 refreshRules.put(variable, rule);
             }
+        }
+        ExtractionEngine.ResponseSnapshot responseSnapshot = new ExtractionEngine.ResponseSnapshot(
+                response.statusCode(), headerLines(response.headers()), response.bodyToString());
+        boolean configuredStatus = expiryDetected(
+                response.messageId(), refreshRules, responseSnapshot);
+
+        if (!AutomationPolicy.canAttemptRecovery(
+                globalEnabled, toolEnabled, configuredStatus, hasTemplate, hasVariables)) {
+            if (globalEnabled && !toolEnabled) {
+                debug(response.messageId(), null, ExtractionOutcome.TOOL_DISABLED);
+            }
+            return ResponseReceivedAction.continueWith(response);
         }
         if (refreshRules.isEmpty()) {
             debug(response.messageId(), null, ExtractionOutcome.NO_REFRESH_CANDIDATE);
@@ -258,6 +264,31 @@ public class VariableHttpHandler implements HttpHandler {
                     "Dynamic Variables: retry failed; original HTTP "
                             + response.statusCode() + " preserved.");
         }
+    }
+
+    /**
+     * A rule may describe how its own application announces an expired session (for example a
+     * 302 carrying {@code Location: /login}). When no rule involved in this transaction supplies
+     * a usable signal, the globally configured refresh status codes decide, which is what every
+     * rule created before this feature relies on.
+     */
+    private boolean expiryDetected(int messageId, Map<String, VariableExtractionRule> refreshRules,
+                                   ExtractionEngine.ResponseSnapshot responseSnapshot) {
+        boolean anyUsableSignal = false;
+        for (Map.Entry<String, VariableExtractionRule> entry : refreshRules.entrySet()) {
+            VariableExtractionRule.ExpirySignal signal = entry.getValue().getExpirySignal();
+            if (signal == null) continue;
+            if (!AutomationPolicy.isExpirySignalUsable(signal)) {
+                debug(messageId, entry.getKey(), ExtractionOutcome.EXPIRY_SIGNAL_UNUSABLE);
+                continue;
+            }
+            anyUsableSignal = true;
+            ExtractionOutcome outcome = ExtractionEngine.matchesExpirySignal(signal, responseSnapshot);
+            if (outcome == null) return true;
+            debug(messageId, entry.getKey(), outcome);
+        }
+        if (anyUsableSignal) return false;
+        return variableManager.getRefreshStatusCodes().contains(responseSnapshot.statusCode());
     }
 
     private ResponseReceivedAction continueOriginalWithNote(HttpResponseReceived response, String note) {

@@ -3,6 +3,7 @@ package burp;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -46,6 +47,34 @@ class AutomationPolicyTest {
         assertFalse(AutomationPolicy.canAttemptRecovery(true, true, false, true, true));
         assertFalse(AutomationPolicy.canAttemptRecovery(true, true, true, false, true));
         assertFalse(AutomationPolicy.canAttemptRecovery(true, true, true, true, false));
+    }
+
+    @Test
+    void unambiguousAuthCodesAreEnoughOnTheirOwn() {
+        assertTrue(AutomationPolicy.isExpirySignalUsable(signal(Set.of(401), "", "")));
+        assertTrue(AutomationPolicy.isExpirySignalUsable(signal(Set.of(401, 403), "", "")));
+    }
+
+    @Test
+    void ambiguousCodesNeedAContentFilterBeforeTheyCanTriggerAReplay() {
+        assertFalse(AutomationPolicy.isExpirySignalUsable(signal(Set.of(302), "", "")));
+        assertFalse(AutomationPolicy.isExpirySignalUsable(signal(Set.of(401, 302), "", "")));
+        assertTrue(AutomationPolicy.isExpirySignalUsable(
+                signal(Set.of(302), "(?m)^Location:\\s*/login", "")));
+        assertTrue(AutomationPolicy.isExpirySignalUsable(signal(Set.of(), "", "invalid_token")));
+    }
+
+    @Test
+    void aSignalWithoutAnyFilterDecidesNothing() {
+        assertFalse(AutomationPolicy.isExpirySignalUsable(signal(Set.of(), "", "")));
+        assertFalse(AutomationPolicy.isExpirySignalUsable(null));
+    }
+
+    private static VariableExtractionRule.ExpirySignal signal(Set<Integer> codes, String headerRegex,
+                                                              String bodyRegex) {
+        return new VariableExtractionRule.ExpirySignal(codes, headerRegex,
+                VariableExtractionRule.PatternMode.REGEX, bodyRegex,
+                VariableExtractionRule.PatternMode.REGEX, false);
     }
 
     @Test

@@ -5,8 +5,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 public class VariableExtractionRule {
     public enum MatchStrategy { EXPLICIT, LEGACY_EXACT, LEGACY_PATH }
@@ -48,6 +50,30 @@ public class VariableExtractionRule {
         }
     }
 
+    /**
+     * Describes how a response announces that the session behind a variable has expired.
+     * A rule without a signal falls back to the globally configured refresh status codes,
+     * so existing rules keep behaving exactly as before.
+     *
+     * <p>Every populated field must match (logical AND); empty fields do not filter.
+     * {@code negate} inverts the verdict of the whole signal, not of individual fields.
+     */
+    public record ExpirySignal(Set<Integer> statusCodes, String headerRegex, PatternMode headerMode,
+                               String bodyRegex, PatternMode bodyMode, boolean negate) {
+        public ExpirySignal {
+            statusCodes = statusCodes == null ? Set.of() : Set.copyOf(statusCodes);
+            headerRegex = headerRegex == null ? "" : headerRegex;
+            // Headers and bodies are almost never compared literally, so regex is the default.
+            headerMode = headerMode == null ? PatternMode.REGEX : headerMode;
+            bodyRegex = bodyRegex == null ? "" : bodyRegex;
+            bodyMode = bodyMode == null ? PatternMode.REGEX : bodyMode;
+        }
+
+        public boolean isEmpty() {
+            return statusCodes.isEmpty() && headerRegex.isEmpty() && bodyRegex.isEmpty();
+        }
+    }
+
     private boolean enabled;
     private boolean automaticRefreshEnabled;
     private boolean allowNonIdempotentReplay;
@@ -74,6 +100,7 @@ public class VariableExtractionRule {
     private PatternMode queryMatchMode = PatternMode.LITERAL;
     private DiscriminatorSource discriminatorSource = DiscriminatorSource.NONE;
     private String discriminatorRegex = "";
+    private ExpirySignal expirySignal;
 
     public VariableExtractionRule() {
         enabled = false;
@@ -246,6 +273,36 @@ public class VariableExtractionRule {
     public PatternMode getQueryMatchMode() { return queryMatchMode; }
     public DiscriminatorSource getDiscriminatorSource() { return discriminatorSource; }
     public String getDiscriminatorRegex() { return discriminatorRegex; }
+    public ExpirySignal getExpirySignal() { return expirySignal; }
+
+    /**
+     * A signal without any populated filter cannot decide anything, so it is stored as
+     * {@code null}. Callers then only have to handle one "no signal" case.
+     */
+    public void setExpirySignal(ExpirySignal signal) {
+        this.expirySignal = (signal == null || signal.isEmpty()) ? null : signal;
+    }
+
+    static Set<Integer> parseStatusCodes(String value) {
+        if (value == null || value.isEmpty()) return Set.of();
+        Set<Integer> codes = new LinkedHashSet<>();
+        for (String part : value.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            try {
+                codes.add(Integer.parseInt(trimmed));
+            } catch (NumberFormatException ignored) {
+                // A corrupted token is skipped instead of discarding the whole signal.
+            }
+        }
+        return codes;
+    }
+
+    static String formatStatusCodes(Set<Integer> codes) {
+        if (codes == null || codes.isEmpty()) return "";
+        return codes.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
 
     public String serialize() {
         List<ExtractionTarget> currentTargets = getTargets();
@@ -256,44 +313,42 @@ public class VariableExtractionRule {
         }
         String targetsStr = String.join(";", encodedTargets);
 
+        ExpirySignal signal = expirySignal;
+        String signalCodes = signal == null ? "" : formatStatusCodes(signal.statusCodes());
+        String signalHeaderRegex = signal == null ? "" : signal.headerRegex();
+        PatternMode signalHeaderMode = signal == null ? PatternMode.REGEX : signal.headerMode();
+        String signalBodyRegex = signal == null ? "" : signal.bodyRegex();
+        PatternMode signalBodyMode = signal == null ? PatternMode.REGEX : signal.bodyMode();
+        boolean signalNegate = signal != null && signal.negate();
+
         return String.join("|",
-                "v5",
+                "v6",
                 enc(matchUrl), enc(getSource()), Boolean.toString(enabled), enc(getRegex()),
                 savedRequestBase64, enc(savedHost), Integer.toString(savedPort), Boolean.toString(savedSecure),
                 Boolean.toString(automaticRefreshEnabled), Boolean.toString(allowNonIdempotentReplay),
                 matchStrategy.name(), enc(matchMethod), enc(matchHost), Integer.toString(matchPort),
                 Boolean.toString(matchSecure), enc(matchPath), pathMatchMode.name(), enc(matchQuery),
                 queryMatchMode.name(), discriminatorSource.name(), enc(discriminatorRegex),
-                enc(getJoinDelimiter()), enc(targetsStr), enc(valueTemplate));
+                enc(getJoinDelimiter()), enc(targetsStr), enc(valueTemplate),
+                enc(signalCodes), enc(signalHeaderRegex), signalHeaderMode.name(),
+                enc(signalBodyRegex), signalBodyMode.name(), Boolean.toString(signalNegate));
     }
 
     public static VariableExtractionRule deserialize(String data) {
         if (data == null || data.isEmpty()) return new VariableExtractionRule();
         try {
             String[] parts = data.split("\\|", -1);
-            if (parts.length >= 25 && "v5".equals(parts[0])) {
-                VariableExtractionRule rule = loadV4Fields(parts);
-                rule.joinDelimiter = dec(parts[22]);
-                rule.valueTemplate = dec(parts[24]);
-
-                String targetsStr = dec(parts[23]);
-                if (!targetsStr.isEmpty()) {
-                    List<ExtractionTarget> loadedTargets = new ArrayList<>();
-                    String[] targetParts = targetsStr.split(";");
-                    for (String targetPart : targetParts) {
-                        int firstColon = targetPart.indexOf(':');
-                        int secondColon = targetPart.indexOf(':', firstColon + 1);
-                        if (firstColon > 0 && secondColon > firstColon) {
-                            loadedTargets.add(new ExtractionTarget(
-                                    dec(targetPart.substring(0, firstColon)),
-                                    ExtractionSource.fromStored(dec(
-                                            targetPart.substring(firstColon + 1, secondColon))),
-                                    dec(targetPart.substring(secondColon + 1))));
-                        }
-                    }
-                    if (!loadedTargets.isEmpty()) rule.setTargets(loadedTargets);
-                }
+            if (parts.length >= 31 && "v6".equals(parts[0])) {
+                VariableExtractionRule rule = loadV5Fields(parts);
+                rule.setExpirySignal(new ExpirySignal(
+                        parseStatusCodes(dec(parts[25])),
+                        dec(parts[26]), enumValue(PatternMode.class, parts[27], PatternMode.REGEX),
+                        dec(parts[28]), enumValue(PatternMode.class, parts[29], PatternMode.REGEX),
+                        Boolean.parseBoolean(parts[30])));
                 return rule;
+            }
+            if (parts.length >= 25 && "v5".equals(parts[0])) {
+                return loadV5Fields(parts);
             }
             if (parts.length >= 24 && "v4".equals(parts[0])) {
                 VariableExtractionRule rule = loadV4Fields(parts);
@@ -352,6 +407,31 @@ public class VariableExtractionRule {
             // Invalid persisted rules are disabled rather than guessed.
         }
         return new VariableExtractionRule();
+    }
+
+    private static VariableExtractionRule loadV5Fields(String[] parts) {
+        VariableExtractionRule rule = loadV4Fields(parts);
+        rule.joinDelimiter = dec(parts[22]);
+        rule.valueTemplate = dec(parts[24]);
+
+        String targetsStr = dec(parts[23]);
+        if (!targetsStr.isEmpty()) {
+            List<ExtractionTarget> loadedTargets = new ArrayList<>();
+            String[] targetParts = targetsStr.split(";");
+            for (String targetPart : targetParts) {
+                int firstColon = targetPart.indexOf(':');
+                int secondColon = targetPart.indexOf(':', firstColon + 1);
+                if (firstColon > 0 && secondColon > firstColon) {
+                    loadedTargets.add(new ExtractionTarget(
+                            dec(targetPart.substring(0, firstColon)),
+                            ExtractionSource.fromStored(dec(
+                                    targetPart.substring(firstColon + 1, secondColon))),
+                            dec(targetPart.substring(secondColon + 1))));
+                }
+            }
+            if (!loadedTargets.isEmpty()) rule.setTargets(loadedTargets);
+        }
+        return rule;
     }
 
     private static VariableExtractionRule loadV4Fields(String[] parts) {

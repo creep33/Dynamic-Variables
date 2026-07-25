@@ -106,6 +106,13 @@ public final class VariableManager {
     private JButton updateRuleButton;
     private JToggleButton advancedMatchToggle;
     private JPanel advancedMatchPanel;
+    private JTextField signalStatusCodesField;
+    private JTextField signalHeaderRegexField;
+    private JComboBox<String> signalHeaderModeComboBox;
+    private JTextField signalBodyRegexField;
+    private JComboBox<String> signalBodyModeComboBox;
+    private JCheckBox signalNegateCheckBox;
+    private JLabel signalWarningLabel;
 
     // Refresh Panel Components
     private JLabel savedRequestLabel;
@@ -114,6 +121,8 @@ public final class VariableManager {
     private JButton editRequestButton;
 
     private static final int DEFAULT_DIVIDER_LOCATION = 450;
+    // Amber reads as a warning against both the light and the dark Burp themes.
+    private static final Color WARNING_FOREGROUND = new Color(0xB3, 0x5C, 0x00);
 
     private boolean isUpdatingUI = false;
     // Variable ids whose 2FA secret already failed to decode, so the error is logged once.
@@ -915,73 +924,188 @@ public final class VariableManager {
         rgbc.insets = new Insets(4, 5, 4, 5);
         rgbc.gridx = 0;
 
-        JPanel retrySafetyPanel = new JPanel();
-        retrySafetyPanel.setLayout(new BoxLayout(retrySafetyPanel, BoxLayout.Y_AXIS));
+        // GridBagLayout with the same insets as the other two boxes, so that their contents and
+        // their explanation lines start at the same x.
+        JPanel retrySafetyPanel = new JPanel(new GridBagLayout());
         retrySafetyPanel.setBorder(BorderFactory.createTitledBorder(text("Session recovery retry safety")));
+        GridBagConstraints tgbc = new GridBagConstraints();
+        tgbc.fill = GridBagConstraints.HORIZONTAL;
+        tgbc.insets = new Insets(4, 5, 4, 5);
+        tgbc.gridx = 0;
+        tgbc.gridwidth = 2;
+        tgbc.weightx = 1.0;
+        JLabel retrySafetyExplanation = automationExplanationLabel(text(
+                "Allows retrying methods such as POST, PUT, PATCH, and DELETE after refreshing the value. Enable only when repeating the operation is safe."));
+        tgbc.gridy = 0;
+        retrySafetyPanel.add(retrySafetyExplanation, tgbc);
         allowNonIdempotentReplayCheckBox = new JCheckBox(
                 text("In session recovery, allow retrying non-idempotent requests"));
         allowNonIdempotentReplayCheckBox.setToolTipText(text(
                 "Allows retrying methods such as POST, PUT, PATCH, and DELETE after refreshing the value. Enable only when repeating the operation is safe."));
         allowNonIdempotentReplayCheckBox.addActionListener(e -> updateActiveRuleFromUI());
-        retrySafetyPanel.add(allowNonIdempotentReplayCheckBox);
-        JLabel retrySafetyExplanation = automationExplanationLabel(text(
-                "Allows retrying methods such as POST, PUT, PATCH, and DELETE after refreshing the value. Enable only when repeating the operation is safe."));
-        retrySafetyPanel.add(retrySafetyExplanation);
+        tgbc.gridy = 1;
+        retrySafetyPanel.add(allowNonIdempotentReplayCheckBox, tgbc);
         rgbc.gridy = 0;
         rgbc.gridwidth = 2;
         advancedMatchPanel.add(retrySafetyPanel, rgbc);
 
-        JPanel passiveMatchingExplanation = new JPanel();
-        passiveMatchingExplanation.setLayout(new BoxLayout(passiveMatchingExplanation, BoxLayout.Y_AXIS));
-        passiveMatchingExplanation.setBorder(BorderFactory.createTitledBorder(
-                text("Passive extraction request matching")));
-        passiveMatchingExplanation.add(automationExplanationLabel(text(
-                "Every configured filter must match. The path does not include the query string.")));
-        passiveMatchingExplanation.add(automationExplanationLabel(text(
-                "An empty query and a None discriminator do not filter requests.")));
-        passiveMatchingExplanation.add(automationExplanationLabel(text(
-                "Literal requires an exact match; a regular expression only needs to find a match.")));
-        rgbc.gridy = 1;
-        advancedMatchPanel.add(passiveMatchingExplanation, rgbc);
+        JPanel expiryPanel = new JPanel(new GridBagLayout());
+        expiryPanel.setBorder(BorderFactory.createTitledBorder(text("Session expiry signal")));
+        GridBagConstraints sgbc = new GridBagConstraints();
+        sgbc.fill = GridBagConstraints.HORIZONTAL;
+        sgbc.insets = new Insets(4, 5, 4, 5);
+        sgbc.gridx = 0;
+        sgbc.gridwidth = 2;
+        sgbc.gridy = 0;
+        expiryPanel.add(automationExplanationLabel(text(
+                "Describes how a response announces that this session has expired.")), sgbc);
+        sgbc.gridy = 1;
+        expiryPanel.add(automationExplanationLabel(text(
+                "Leave every field empty to use the global refresh status codes.")), sgbc);
+        sgbc.gridy = 2;
+        expiryPanel.add(automationExplanationLabel(text(
+                "Login redirect example: codes 301, 302 with header filter Location:\\s*/login")), sgbc);
 
-        rgbc.gridwidth = 1;
-        rgbc.gridy = 2;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
-        advancedMatchPanel.add(new JLabel(text("Matching mode:")), rgbc);
+        String signalStatusToolTip = text(
+                "Comma-separated status codes. Empty accepts any status code.");
+        sgbc.gridwidth = 1;
+        sgbc.gridy = 3;
+        sgbc.gridx = 0;
+        sgbc.weightx = 0.0;
+        JLabel signalStatusLabel = new JLabel(text("Expiry status codes:"));
+        signalStatusLabel.setToolTipText(signalStatusToolTip);
+        expiryPanel.add(signalStatusLabel, sgbc);
+        signalStatusCodesField = new JTextField();
+        signalStatusCodesField.setToolTipText(signalStatusToolTip);
+        signalStatusCodesField.getDocument().addDocumentListener(
+                new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        sgbc.gridx = 1;
+        sgbc.weightx = 1.0;
+        expiryPanel.add(signalStatusCodesField, sgbc);
+
+        String signalHeaderToolTip = text(
+                "Optional. Searched inside the response header block. Empty does not filter.");
+        sgbc.gridy = 4;
+        sgbc.gridx = 0;
+        sgbc.weightx = 0.0;
+        JLabel signalHeaderLabel = new JLabel(text("Response header filter:"));
+        signalHeaderLabel.setToolTipText(signalHeaderToolTip);
+        expiryPanel.add(signalHeaderLabel, sgbc);
+        JPanel signalHeaderPanel = new JPanel(new BorderLayout(5, 0));
+        signalHeaderModeComboBox = new JComboBox<>(
+                new String[]{text("Regular expression"), text("Literal")});
+        signalHeaderModeComboBox.setToolTipText(signalHeaderToolTip);
+        signalHeaderModeComboBox.addActionListener(e -> updateActiveRuleFromUI());
+        signalHeaderRegexField = new JTextField();
+        signalHeaderRegexField.setToolTipText(signalHeaderToolTip);
+        signalHeaderRegexField.getDocument().addDocumentListener(
+                new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        signalHeaderPanel.add(signalHeaderModeComboBox, BorderLayout.WEST);
+        signalHeaderPanel.add(signalHeaderRegexField, BorderLayout.CENTER);
+        sgbc.gridx = 1;
+        sgbc.weightx = 1.0;
+        expiryPanel.add(signalHeaderPanel, sgbc);
+
+        String signalBodyToolTip = text(
+                "Optional. Searched inside the response body. Empty does not filter.");
+        sgbc.gridy = 5;
+        sgbc.gridx = 0;
+        sgbc.weightx = 0.0;
+        JLabel signalBodyLabel = new JLabel(text("Response body filter:"));
+        signalBodyLabel.setToolTipText(signalBodyToolTip);
+        expiryPanel.add(signalBodyLabel, sgbc);
+        JPanel signalBodyPanel = new JPanel(new BorderLayout(5, 0));
+        signalBodyModeComboBox = new JComboBox<>(
+                new String[]{text("Regular expression"), text("Literal")});
+        signalBodyModeComboBox.setToolTipText(signalBodyToolTip);
+        signalBodyModeComboBox.addActionListener(e -> updateActiveRuleFromUI());
+        signalBodyRegexField = new JTextField();
+        signalBodyRegexField.setToolTipText(signalBodyToolTip);
+        signalBodyRegexField.getDocument().addDocumentListener(
+                new SimpleDocumentListener(this::updateActiveRuleFromUI));
+        signalBodyPanel.add(signalBodyModeComboBox, BorderLayout.WEST);
+        signalBodyPanel.add(signalBodyRegexField, BorderLayout.CENTER);
+        sgbc.gridx = 1;
+        sgbc.weightx = 1.0;
+        expiryPanel.add(signalBodyPanel, sgbc);
+
+        sgbc.gridy = 6;
+        sgbc.gridx = 0;
+        sgbc.gridwidth = 2;
+        sgbc.weightx = 1.0;
+        signalNegateCheckBox = new JCheckBox(
+                text("The session is expired when the filter does NOT match"));
+        signalNegateCheckBox.setToolTipText(text(
+                "Inverts the verdict of the whole signal, not of individual fields."));
+        signalNegateCheckBox.addActionListener(e -> updateActiveRuleFromUI());
+        expiryPanel.add(signalNegateCheckBox, sgbc);
+
+        sgbc.gridy = 7;
+        signalWarningLabel = new JLabel(" ");
+        signalWarningLabel.setForeground(WARNING_FOREGROUND);
+        signalWarningLabel.setBorder(new EmptyBorder(0, 24, 0, 0));
+        expiryPanel.add(signalWarningLabel, sgbc);
+
+        // Built here but added last, below the passive-matching filters.
+
+        JPanel passiveMatchingPanel = new JPanel(new GridBagLayout());
+        passiveMatchingPanel.setBorder(BorderFactory.createTitledBorder(
+                text("Passive extraction request matching")));
+        GridBagConstraints pgbc = new GridBagConstraints();
+        pgbc.fill = GridBagConstraints.HORIZONTAL;
+        pgbc.insets = new Insets(4, 5, 4, 5);
+        pgbc.gridx = 0;
+        pgbc.gridwidth = 2;
+        pgbc.gridy = 0;
+        passiveMatchingPanel.add(automationExplanationLabel(text(
+                "Every configured filter must match. The path does not include the query string.")), pgbc);
+        pgbc.gridy = 1;
+        passiveMatchingPanel.add(automationExplanationLabel(text(
+                "An empty query and a None discriminator do not filter requests.")), pgbc);
+        pgbc.gridy = 2;
+        passiveMatchingPanel.add(automationExplanationLabel(text(
+                "Literal requires an exact match; a regular expression only needs to find a match.")), pgbc);
+
+        pgbc.gridwidth = 1;
+        pgbc.gridy = 3;
+        pgbc.gridx = 0;
+        pgbc.weightx = 0.0;
+        passiveMatchingPanel.add(new JLabel(text("Matching mode:")), pgbc);
         JPanel strategyPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
         matchStrategyLabel = new JLabel();
         convertMatchButton = new JButton(text("Convert to explicit filters"));
         convertMatchButton.addActionListener(e -> convertActiveRuleToExplicitMatch());
         strategyPanel.add(matchStrategyLabel);
         strategyPanel.add(convertMatchButton);
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        advancedMatchPanel.add(strategyPanel, rgbc);
+        pgbc.gridx = 1;
+        pgbc.weightx = 1.0;
+        passiveMatchingPanel.add(strategyPanel, pgbc);
 
-        rgbc.gridy = 3;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
+        pgbc.gridy = 4;
+        pgbc.gridx = 0;
+        pgbc.weightx = 0.0;
         JLabel methodLabel = new JLabel(text("Method:"));
         methodLabel.setToolTipText(text(
                 "The HTTP method must match exactly, ignoring letter case."));
-        advancedMatchPanel.add(methodLabel, rgbc);
+        passiveMatchingPanel.add(methodLabel, pgbc);
         matchMethodField = new JTextField();
         matchMethodField.setToolTipText(text(
                 "The HTTP method must match exactly, ignoring letter case."));
         matchMethodField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        advancedMatchPanel.add(matchMethodField, rgbc);
+        pgbc.gridx = 1;
+        pgbc.weightx = 1.0;
+        passiveMatchingPanel.add(matchMethodField, pgbc);
 
-        rgbc.gridy = 4;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
+        pgbc.gridy = 5;
+        pgbc.gridx = 0;
+        pgbc.weightx = 0.0;
         JLabel serviceLabel = new JLabel(text("Service:"));
         serviceLabel.setToolTipText(text(
                 "Host, port, and HTTP or HTTPS must all match exactly."));
-        advancedMatchPanel.add(serviceLabel, rgbc);
-        JPanel servicePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        passiveMatchingPanel.add(serviceLabel, pgbc);
+        // FlowLayout also inserts its hgap before the first component, which would push this row
+        // right of every other one; the gaps between fields are added explicitly instead.
+        JPanel servicePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         matchHostField = new JTextField(16);
         matchPortField = new JTextField(5);
         matchSecureCheckBox = new JCheckBox("HTTPS");
@@ -993,20 +1117,22 @@ public final class VariableManager {
         matchPortField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         matchSecureCheckBox.addActionListener(e -> updateActiveRuleFromUI());
         servicePanel.add(matchHostField);
+        servicePanel.add(Box.createHorizontalStrut(5));
         servicePanel.add(matchPortField);
+        servicePanel.add(Box.createHorizontalStrut(5));
         servicePanel.add(matchSecureCheckBox);
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        advancedMatchPanel.add(servicePanel, rgbc);
+        pgbc.gridx = 1;
+        pgbc.weightx = 1.0;
+        passiveMatchingPanel.add(servicePanel, pgbc);
 
-        rgbc.gridy = 5;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
+        pgbc.gridy = 6;
+        pgbc.gridx = 0;
+        pgbc.weightx = 0.0;
         JLabel pathLabel = new JLabel(text("Path filter:"));
         String pathToolTip = text(
                 "Matches only the path, without query parameters. Literal compares the full path; a regular expression searches for a match.");
         pathLabel.setToolTipText(pathToolTip);
-        advancedMatchPanel.add(pathLabel, rgbc);
+        passiveMatchingPanel.add(pathLabel, pgbc);
         JPanel pathPanel = new JPanel(new BorderLayout(5, 0));
         pathModeComboBox = new JComboBox<>(new String[]{text("Literal"), text("Regular expression")});
         pathModeComboBox.setToolTipText(pathToolTip);
@@ -1016,18 +1142,18 @@ public final class VariableManager {
         matchUrlField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         pathPanel.add(pathModeComboBox, BorderLayout.WEST);
         pathPanel.add(matchUrlField, BorderLayout.CENTER);
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        advancedMatchPanel.add(pathPanel, rgbc);
+        pgbc.gridx = 1;
+        pgbc.weightx = 1.0;
+        passiveMatchingPanel.add(pathPanel, pgbc);
 
-        rgbc.gridy = 6;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
+        pgbc.gridy = 7;
+        pgbc.gridx = 0;
+        pgbc.weightx = 0.0;
         JLabel queryLabel = new JLabel(text("Query filter:"));
         String queryToolTip = text(
                 "Optional. Matches the complete raw query string. Leave empty to accept any query.");
         queryLabel.setToolTipText(queryToolTip);
-        advancedMatchPanel.add(queryLabel, rgbc);
+        passiveMatchingPanel.add(queryLabel, pgbc);
         JPanel queryPanel = new JPanel(new BorderLayout(5, 0));
         queryModeComboBox = new JComboBox<>(new String[]{text("Literal"), text("Regular expression")});
         queryModeComboBox.setToolTipText(queryToolTip);
@@ -1037,18 +1163,18 @@ public final class VariableManager {
         queryField.getDocument().addDocumentListener(new SimpleDocumentListener(this::updateActiveRuleFromUI));
         queryPanel.add(queryModeComboBox, BorderLayout.WEST);
         queryPanel.add(queryField, BorderLayout.CENTER);
-        rgbc.gridx = 1;
-        rgbc.weightx = 1.0;
-        advancedMatchPanel.add(queryPanel, rgbc);
+        pgbc.gridx = 1;
+        pgbc.weightx = 1.0;
+        passiveMatchingPanel.add(queryPanel, pgbc);
 
-        rgbc.gridy = 7;
-        rgbc.gridx = 0;
-        rgbc.weightx = 0.0;
+        pgbc.gridy = 8;
+        pgbc.gridx = 0;
+        pgbc.weightx = 0.0;
         JLabel discriminatorLabel = new JLabel(text("Request discriminator:"));
         String discriminatorToolTip = text(
                 "Optional. A regular expression must match the selected request body or headers. Use it to distinguish requests to the same endpoint.");
         discriminatorLabel.setToolTipText(discriminatorToolTip);
-        advancedMatchPanel.add(discriminatorLabel, rgbc);
+        passiveMatchingPanel.add(discriminatorLabel, pgbc);
         JPanel discriminatorPanel = new JPanel(new BorderLayout(5, 0));
         discriminatorSourceComboBox = new JComboBox<>(new String[]{
                 text("None"), text("Request Body"), text("Request Headers")});
@@ -1060,9 +1186,19 @@ public final class VariableManager {
                 new SimpleDocumentListener(this::updateActiveRuleFromUI));
         discriminatorPanel.add(discriminatorSourceComboBox, BorderLayout.WEST);
         discriminatorPanel.add(discriminatorRegexField, BorderLayout.CENTER);
-        rgbc.gridx = 1;
+        pgbc.gridx = 1;
+        pgbc.weightx = 1.0;
+        passiveMatchingPanel.add(discriminatorPanel, pgbc);
+
+        rgbc.gridy = 1;
+        rgbc.gridx = 0;
+        rgbc.gridwidth = 2;
         rgbc.weightx = 1.0;
-        advancedMatchPanel.add(discriminatorPanel, rgbc);
+        advancedMatchPanel.add(passiveMatchingPanel, rgbc);
+
+        rgbc.gridy = 2;
+        advancedMatchPanel.add(expiryPanel, rgbc);
+
         advancedMatchPanel.setVisible(false);
         advancedMatchToggle.addActionListener(e ->
                 setAdvancedMatchingExpanded(advancedMatchToggle.isSelected()));
@@ -1189,7 +1325,7 @@ public final class VariableManager {
         recoveryEnabledCheckBox.setToolTipText(recoveryExplanation);
         JTextField statusCodesField = new JTextField(refreshStatusCodes, 10);
         statusCodesField.setToolTipText(text(
-                "HTTP status codes (comma separated) that trigger an automatic token refresh (e.g., 401, 403)."));
+                "Default HTTP status codes (comma separated) that trigger an automatic token refresh (e.g., 401, 403). A variable with its own expiry signal ignores this list."));
         Map<AutomationTool, JCheckBox> extractionToolChecks = new EnumMap<>(AutomationTool.class);
         Map<AutomationTool, JCheckBox> recoveryToolChecks = new EnumMap<>(AutomationTool.class);
         JTextField tagField = new JTextField(placeholderTag, 20);
@@ -1475,9 +1611,12 @@ public final class VariableManager {
         automaticRefreshCheckBox.setSelected(!totpVariable && rule.isAutomaticRefreshEnabled());
         allowNonIdempotentReplayCheckBox.setEnabled(!totpVariable);
         allowNonIdempotentReplayCheckBox.setSelected(!totpVariable && rule.isAllowNonIdempotentReplay());
+        // A 2FA variable is computed from its secret, so it never recovers a session over the wire.
+        displayExpirySignal(rule.getExpirySignal(), !totpVariable);
 
         boolean explicit = rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT;
-        setAdvancedMatchingExpanded(!explicit || rule.isAllowNonIdempotentReplay());
+        setAdvancedMatchingExpanded(!explicit || rule.isAllowNonIdempotentReplay()
+                || rule.getExpirySignal() != null);
         matchStrategyLabel.setText(switch (rule.getMatchStrategy()) {
             case EXPLICIT -> text("Explicit filters");
             case LEGACY_EXACT -> text("Legacy exact saved request matching");
@@ -1560,6 +1699,7 @@ public final class VariableManager {
         ruleEnabledCheckBox.setSelected(false);
         automaticRefreshCheckBox.setSelected(false);
         allowNonIdempotentReplayCheckBox.setSelected(false);
+        displayExpirySignal(null, false);
         matchStrategyLabel.setText("");
         convertMatchButton.setVisible(false);
         setMatchFieldsEnabled(false);
@@ -1607,6 +1747,9 @@ public final class VariableManager {
                 rule.setEnabled(ruleEnabled);
                 rule.setAutomaticRefreshEnabled(automaticRefreshCheckBox.isSelected());
                 rule.setAllowNonIdempotentReplay(allowNonIdempotentReplayCheckBox.isSelected());
+                // Kept outside the EXPLICIT branch: an expiry signal is meaningful for legacy rules too.
+                rule.setExpirySignal(readExpirySignalFromUI());
+                updateExpirySignalWarning(rule.getExpirySignal());
                 int targetIndex = Math.max(0, extractionZoneComboBox.getSelectedIndex());
                 if (targetIndex < rule.getTargets().size()) {
                     rule.replaceTarget(targetIndex,
@@ -1791,6 +1934,60 @@ public final class VariableManager {
         } catch (Exception ignored) {
             return 0;
         }
+    }
+
+    private void displayExpirySignal(VariableExtractionRule.ExpirySignal signal, boolean editable) {
+        if (signalStatusCodesField == null) return;
+        signalStatusCodesField.setEnabled(editable);
+        signalHeaderModeComboBox.setEnabled(editable);
+        signalHeaderRegexField.setEnabled(editable);
+        signalBodyModeComboBox.setEnabled(editable);
+        signalBodyRegexField.setEnabled(editable);
+        signalNegateCheckBox.setEnabled(editable);
+
+        VariableExtractionRule.ExpirySignal shown = editable ? signal : null;
+        signalStatusCodesField.setText(shown == null
+                ? "" : VariableExtractionRule.formatStatusCodes(shown.statusCodes()));
+        signalHeaderModeComboBox.setSelectedIndex(
+                shown == null ? 0 : patternModeIndex(shown.headerMode()));
+        signalHeaderRegexField.setText(shown == null ? "" : shown.headerRegex());
+        signalBodyModeComboBox.setSelectedIndex(
+                shown == null ? 0 : patternModeIndex(shown.bodyMode()));
+        signalBodyRegexField.setText(shown == null ? "" : shown.bodyRegex());
+        signalNegateCheckBox.setSelected(shown != null && shown.negate());
+        updateExpirySignalWarning(shown);
+    }
+
+    private VariableExtractionRule.ExpirySignal readExpirySignalFromUI() {
+        if (signalStatusCodesField == null) return null;
+        VariableExtractionRule.ExpirySignal signal = new VariableExtractionRule.ExpirySignal(
+                VariableExtractionRule.parseStatusCodes(signalStatusCodesField.getText()),
+                signalHeaderRegexField.getText().trim(), patternModeAt(signalHeaderModeComboBox),
+                signalBodyRegexField.getText().trim(), patternModeAt(signalBodyModeComboBox),
+                signalNegateCheckBox.isSelected());
+        return signal.isEmpty() ? null : signal;
+    }
+
+    /**
+     * The resolver already ignores an unusable signal and logs it, so this only warns; it never
+     * blocks saving. Otherwise a half-typed status code would fight the user on every keystroke.
+     */
+    private void updateExpirySignalWarning(VariableExtractionRule.ExpirySignal signal) {
+        if (signalWarningLabel == null) return;
+        boolean unusable = signal != null && !AutomationPolicy.isExpirySignalUsable(signal);
+        signalWarningLabel.setText(unusable
+                ? text("Codes other than 401 and 403 require a header or body filter; this signal is ignored.")
+                : " ");
+    }
+
+    private static int patternModeIndex(VariableExtractionRule.PatternMode mode) {
+        return mode == VariableExtractionRule.PatternMode.LITERAL ? 1 : 0;
+    }
+
+    private static VariableExtractionRule.PatternMode patternModeAt(JComboBox<String> comboBox) {
+        return comboBox.getSelectedIndex() == 1
+                ? VariableExtractionRule.PatternMode.LITERAL
+                : VariableExtractionRule.PatternMode.REGEX;
     }
 
     private void setMatchFieldsEnabled(boolean enabled) {
@@ -2486,6 +2683,7 @@ public final class VariableManager {
                         .map(header -> header.name() + ": " + header.value()).toList(),
                 reqResp.request().bodyToString());
         ExtractionEngine.ResponseSnapshot responseSnapshot = new ExtractionEngine.ResponseSnapshot(
+                reqResp.response().statusCode(),
                 reqResp.response().headers().stream()
                         .map(header -> header.name() + ": " + header.value()).toList(),
                 reqResp.response().bodyToString());

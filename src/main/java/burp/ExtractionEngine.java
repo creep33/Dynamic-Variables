@@ -27,7 +27,7 @@ final class ExtractionEngine {
         }
     }
 
-    record ResponseSnapshot(List<String> headers, String body) {
+    record ResponseSnapshot(int statusCode, List<String> headers, String body) {
         String headersText() {
             return String.join("\r\n", headers) + (headers.isEmpty() ? "" : "\r\n");
         }
@@ -78,6 +78,66 @@ final class ExtractionEngine {
             }
         }
         return null;
+    }
+
+    /**
+     * Decides whether a response announces an expired session. Returns {@code null} when the
+     * signal matches (i.e. the session is expired) and a mismatch outcome otherwise, following
+     * the same convention as {@link #matchesExplicitRequest}.
+     */
+    static ExtractionOutcome matchesExpirySignal(VariableExtractionRule.ExpirySignal signal,
+                                                 ResponseSnapshot response) {
+        if (signal == null || response == null) return ExtractionOutcome.EXPIRY_SIGNAL_MISMATCH;
+        ExtractionOutcome result = evaluateSignal(signal, response);
+        // A malformed pattern is an error, never evidence of expiry: it must survive negation.
+        if (result == ExtractionOutcome.INVALID_REGEX) return result;
+        if (signal.negate()) {
+            return result == null ? ExtractionOutcome.EXPIRY_SIGNAL_MISMATCH : null;
+        }
+        return result;
+    }
+
+    private static ExtractionOutcome evaluateSignal(VariableExtractionRule.ExpirySignal signal,
+                                                    ResponseSnapshot response) {
+        if (!signal.statusCodes().isEmpty()
+                && !signal.statusCodes().contains(response.statusCode())) {
+            return ExtractionOutcome.EXPIRY_SIGNAL_MISMATCH;
+        }
+        if (!signal.headerRegex().isEmpty()) {
+            // MULTILINE so that ^ anchors at every header line, not only at the first one.
+            ExtractionOutcome headerResult = matchesContent(
+                    signal.headerRegex(), response.headersText(), signal.headerMode(),
+                    Pattern.MULTILINE);
+            if (headerResult != null) return headerResult;
+        }
+        if (!signal.bodyRegex().isEmpty()) {
+            // DOTALL so that . spans lines, matching how extraction regexes are compiled.
+            ExtractionOutcome bodyResult = matchesContent(
+                    signal.bodyRegex(), response.body(), signal.bodyMode(), Pattern.DOTALL);
+            if (bodyResult != null) return bodyResult;
+        }
+        return null;
+    }
+
+    /**
+     * Header blocks and bodies are searched, never compared as a whole: requiring the configured
+     * text to equal the entire content would be unusable, because a header block carries volatile
+     * values such as {@code Date} and a body rarely repeats byte for byte. LITERAL therefore means
+     * "contains this text", unlike the path and query filters where it means "is exactly this".
+     */
+    private static ExtractionOutcome matchesContent(String configured, String actual,
+                                                    VariableExtractionRule.PatternMode mode,
+                                                    int regexFlags) {
+        String content = nullToEmpty(actual);
+        if (mode == VariableExtractionRule.PatternMode.LITERAL) {
+            return content.contains(configured) ? null : ExtractionOutcome.EXPIRY_SIGNAL_MISMATCH;
+        }
+        try {
+            return Pattern.compile(configured, regexFlags).matcher(content).find()
+                    ? null : ExtractionOutcome.EXPIRY_SIGNAL_MISMATCH;
+        } catch (PatternSyntaxException error) {
+            return ExtractionOutcome.INVALID_REGEX;
+        }
     }
 
     static Evaluation extract(VariableExtractionRule rule, RequestSnapshot request, ResponseSnapshot response) {
