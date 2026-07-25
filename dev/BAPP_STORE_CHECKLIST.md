@@ -58,10 +58,10 @@ Este documento recopila los criterios de aceptación oficiales de PortSwigger pa
 ---
 
 ### 7. Uso de la Red de Burp (Uses Burp networking)
-- **Criterio**: Hacer peticiones HTTP a través de `api.http().issueHttpRequest()` en lugar de librerías como `java.net.URL` o `HttpClient`.
+- **Criterio**: Hacer peticiones HTTP a través de la red de Burp (`api.http().sendRequest(...)`) en lugar de librerías como `java.net.URL` o `HttpClient`.
 - **Estado**: **CUMPLE**
 - **Detalle / Verificación**:
-  - Toda emisión de peticiones HTTP de refresco automático utiliza `api.http().issueHttpRequest(...)`. Esto garantiza el respeto de proxys upstream, reglas de sesión y configuraciones globales de Burp.
+  - Las tres emisiones de peticiones de la extensión utilizan `api.http().sendRequest(...)`: `VariableHttpHandler.java` (reenvío de la petición original tras recuperar la sesión) y `VariableManager.java`, tanto en "Update Rule from Response..." como en `fetchRefreshedVariable`. Salen por la pila HTTP de Burp, por lo que se aplican el proxy upstream y la configuración TLS; las reglas de sesión se aplican si su ámbito incluye `Extensions`.
   - No realiza llamadas de red en audit pasivo (`ScanCheck.passiveAudit()`).
 
 ---
@@ -115,6 +115,6 @@ Al realizar modificaciones en la extensión, asegúrate de verificar lo siguient
 - [ ] **Sin Hilos Bloqueados en Swing**: Ninguna petición HTTP o tarea de I/O se ejecuta en el Event Dispatch Thread (EDT).
 - [ ] **Log de Excepciones**: Los bloques `catch` en hilos secundarios reportan el stacktrace usando `api.logging().logToError(...)`.
 - [ ] **Diálogos Modal/Popups**: Todos los `JDialog`, `JOptionPane`, `JFileChooser` creados tienen como padre `api.userInterface().swingUtils().suiteFrame()`.
-- [ ] **Requisitos de Red**: Todas las peticiones HTTP externas utilizan `api.http().issueHttpRequest(...)`.
+- [ ] **Requisitos de Red**: Todas las peticiones HTTP externas utilizan `api.http().sendRequest(...)`, sin `java.net.URL`, `HttpURLConnection` ni `HttpClient`.
 - [ ] **Limpieza de Recursos**: En `registerUnloadingHandler`, se liberan adecuadamente hilos/recursos activos.
 - [ ] **Gestión de Memoria**: No se conservan referencias duraderas a grandes colecciones de `HttpRequestResponse`.

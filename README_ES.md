@@ -43,6 +43,8 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 | 14 | **Etiqueta de placeholder configurable** | Permite exigir una etiqueta personalizada como `dv`, de modo que solo se sustituya `{{dv:variable_name}}` y los demás payloads de pentesting con formato `{{...}}` permanezcan intactos. |
 | 15 | **Interfaz en inglés y español** | Permite elegir el idioma de toda la extensión desde **Configuración...**. El idioma predeterminado es inglés y la selección se conserva entre sesiones de Burp. |
 | 16 | **Extracción de múltiples valores** | Activa un modo múltiple opcional al asignar una variable. Cada valor nombrado conserva su selección, origen y regex, y una plantilla editable como `{{valor1}}; {{valor2}}` compone el valor de la variable padre. |
+| 17 | **Variables 2FA (TOTP)** | Crea una variable desde **Más...** → **Configurar 2FA** cuyo valor es el código 2FA calculado a partir de un secreto Base32. El código se recalcula cada vez que se usa la variable, en lugar de rotar continuamente en segundo plano. |
+| 18 | **Señal de expiración de sesión configurable** | Detecta sesiones caducadas más allá de `401`/`403`. Cada regla puede definir su propia **Señal de expiración de sesión**, combinando códigos de estado con filtros de cabecera y cuerpo de la respuesta, para aplicaciones que responden con un `302` hacia `/login`. |
 
 ---
 
@@ -64,8 +66,8 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 
 1. Abre la pestaña **Dynamic Variables** en Burp Suite.
 2. Opcionalmente, pulsa **Nueva carpeta** y crea una carpeta como `alice`.
-3. Selecciona la carpeta y pulsa **Nueva variable**, o crea la variable dentro de **Sin carpeta**.
-4. Introduce un nombre, por ejemplo `api_key` o `token`. Los nombres de carpetas y variables no pueden contener `.`.
+3. Pulsa **Nueva variable** y elige el destino en el selector **Carpeta:**, que viene en **Sin carpeta** por defecto.
+4. Introduce un nombre, por ejemplo `api_key` o `token`. Los nombres de variables y carpetas solo pueden contener letras, números y `_`, por lo que se rechazan los espacios y los puntos.
 5. Selecciona la variable en la tabla y pega su valor en el **Editor de valor de variable** de la derecha.
 6. En Repeater, referencia una variable sin carpeta mediante `{{api_key}}` o una variable agrupada mediante `{{alice.token}}`. El placeholder se sustituirá al enviar la petición.
 
@@ -121,6 +123,8 @@ Para construir una variable padre a partir de varios fragmentos de la respuesta,
 6. El placeholder `{{jwt}}` se insertará inmediatamente en la posición del cursor.
 7. Pulsa **Send** para transmitir la petición.
 
+Las variables también pueden insertarse sin salir del editor de peticiones. Coloca el cursor donde deba ir el placeholder, haz clic derecho sobre la petición y selecciona **Extensions** → **Dynamic Variables** → **Insertar**. El submenú muestra una entrada por carpeta, además de **Sin carpeta**, y cada elemento presenta el placeholder tal y como se escribirá con la sintaxis activa. El menú indica **No hay variables definidas** cuando no hay nada que insertar, y pide *colocar el cursor en la petición primero* si no se ha seleccionado un punto de inserción.
+
 ### 4. Cambiar una petición a otra carpeta de variables
 
 1. Abre una petición que contenga placeholders agrupados, por ejemplo `{{user1.jwe}}` y `{{user1.accountId}}`.
@@ -169,13 +173,42 @@ Los valores actualizados se preparan y confirman conjuntamente. Si falla cualqui
 
 La extracción pasiva y la recuperación tienen ámbitos de herramientas independientes. Las reglas de carpetas distintas representan identidades de pentest diferentes; si más de una carpeta coincide con una petición, la extracción se detiene de forma segura. Dentro de una carpeta pueden actualizarse conjuntamente varios valores, como access y refresh tokens. Si hay peticiones concurrentes para la misma regla, sólo puede actualizarla la respuesta de la petición enviada más recientemente.
 
-### 7. Actualización interactiva de reglas
+#### Detectar la expiración más allá de 401/403
+
+Muchas aplicaciones no responden con `401` ni `403` cuando la sesión caduca. Una cookie de sesión clásica suele producir un `302` con `Location: /login`, y las aplicaciones de una sola página devuelven con frecuencia la página de login con un `200`. Para esos casos, cada variable puede definir su propia **Señal de expiración de sesión** dentro de **Mostrar opciones avanzadas de automatización**:
+
+1. Selecciona la variable y abre **Mostrar opciones avanzadas de automatización**.
+2. Rellena **Códigos de estado de expiración:** con los códigos que indican la caducidad, por ejemplo `301, 302`. Déjalo vacío para aceptar cualquier código.
+3. Añade un **Filtro de cabecera de respuesta:** como `Location:\s*/login`, o un **Filtro de cuerpo de respuesta:** como `"error":"invalid_token"`.
+4. Opcionalmente activa **La sesión ha expirado cuando el filtro NO casa** para invertir el veredicto de la señal completa, útil cuando la caducidad se manifiesta por la *ausencia* de un marcador.
+
+Todos los campos rellenos deben coincidir. Ambos filtros se buscan dentro del contenido: **Literal** busca el texto en cualquier punto del bloque de cabeceras o del cuerpo, y **Expresión regular** busca una coincidencia, con `^` anclando en cada línea de cabecera. Esto se diferencia de los filtros de ruta y query del emparejamiento pasivo, donde **Literal** significa una comparación exacta.
+
+Los códigos de estado distintos de `401` y `403` requieren un filtro de cabecera o de cuerpo. Un `302` a secas es ambiguo — los cierres de sesión y los endpoints públicos también redirigen — y sin ese requisito una regla que permita el reenvío no idempotente reenviaría peticiones `POST` en cada redirección normal. Una señal que no cumple el requisito se ignora y se utilizan los códigos de estado configurados globalmente.
+
+Una variable sin señal sigue utilizando los códigos de estado de **Configuración...**, por lo que las reglas existentes no se ven afectadas.
+
+> Si *follow redirects* está activado en Repeater, el `302` nunca llega a la extensión porque Burp ya lo ha seguido. Desactiva la opción o detecta la página de login mediante un filtro de cuerpo.
+
+### 7. Crear una variable 2FA (TOTP)
+
+1. Pulsa **Más...** en la pestaña Dynamic Variables y selecciona **Configurar 2FA**.
+2. Elige el destino en **Carpeta:** e introduce el **Nombre de variable:**.
+3. Pega el **Secreto 2FA (Base32):** que proporciona la aplicación. Solo se aceptan caracteres Base32 (`A-Z`, `2-7`).
+4. Despliega **Avanzado** únicamente si el servicio no utiliza los valores predeterminados de `SHA1`, `6` dígitos y periodo de `30` segundos. Allí se configuran **Dígitos:**, **Periodo (segundos):** y **Algoritmo:**.
+5. Comprueba en **Código actual:** que el secreto genera el código esperado y pulsa **Crear**.
+
+La variable se utiliza después como cualquier otro placeholder, por ejemplo `{{totp}}` o `{{alice.totp}}`. Su valor se calcula a partir del secreto cada vez que se usa la variable, de modo que la petición siempre lleva un código válido sin ninguna rotación en segundo plano. **Rotar ahora** recalcula el código bajo demanda, aunque el código solo cambia cuando termina su periodo. Una variable 2FA es dueña de su valor: nunca se extrae de una respuesta ni se reenvía durante la recuperación de sesión, por lo que el editor de valor y las opciones de automatización aparecen desactivados.
+
+### 8. Actualización interactiva de reglas
 
 1. Si cambia la estructura de la respuesta de la API, selecciona la variable en la tabla.
 2. Pulsa **Actualizar regla desde respuesta...**.
 3. La extensión obtiene una respuesta nueva del servidor y la muestra en un visor sin procesar.
 4. Selecciona la nueva ubicación del token para volver a generar inmediatamente el patrón regex.
 5. Pulsa **Guardar regla de extracción** para guardar los cambios.
+
+**Editar petición** abre el editor aunque la variable todavía no tenga una petición de actualización guardada, partiendo de una plantilla `GET /` en blanco para poder construir la petición desde cero en lugar de tener que capturarla antes.
 
 ---
 
@@ -274,7 +307,7 @@ Una ejecución correcta termina con `BUILD SUCCESSFUL`. Gradle escribe el inform
 
 1. **Verificación de Pruebas**: Asegúrate de que todas las pruebas unitarias pasen sin errores ejecutando `./gradlew test`.
 2. **Reactividad de la GUI**: Nunca ejecutes operaciones de red o I/O lentas en el Event Dispatch Thread (EDT) de Swing. Utiliza hilos secundarios (`new Thread(...)`).
-3. **Red de Burp**: Utiliza `api.http().issueHttpRequest(...)` de Montoya para todas las comunicaciones HTTP externas a fin de respetar los proxys y reglas de sesión de Burp Suite.
+3. **Red de Burp**: Utiliza `api.http().sendRequest(...)` de Montoya para todas las comunicaciones HTTP externas, de modo que se apliquen los proxys upstream, la configuración TLS y las reglas de sesión de Burp Suite.
 4. **Contenedor Padre para Diálogos**: Especifica siempre `api.userInterface().swingUtils().suiteFrame()` como ventana contenedora padre para diálogos modales o popups (`JDialog`, `JOptionPane`).
 5. **Entorno Limpio**: No incluyas rutas locales del sistema de archivos ni información confidencial en el código ni en la documentación.
 

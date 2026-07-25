@@ -46,7 +46,7 @@ When modifying this repository, strictly adhere to the following rules:
    - All Swing UI mutations from background threads must be wrapped in `SwingUtilities.invokeLater(...)`.
    - Exceptions inside background threads must be caught and logged using `api.logging().logToError(...)`.
 3. **Burp Networking**:
-   - Issue all outbound HTTP requests through Montoya's `api.http().issueHttpRequest(...)`. Do not use standard Java HTTP libraries (`java.net.URL`, `HttpClient`, etc.) to ensure upstream proxy and session rules are honored.
+   - Issue all outbound HTTP requests through Burp's networking: `api.http().sendRequest(...)` (or `sendRequests(...)` / `createRequestEngine()` for bulk traffic). Do not use standard Java HTTP libraries (`java.net.URL`, `HttpClient`, etc.), so Burp's upstream proxy and TLS settings apply and the traffic stays visible in Burp.
 4. **GUI Dialog Parent Window**:
    - Every `JDialog`, `JOptionPane`, or popup must set its parent window using `api.userInterface().swingUtils().suiteFrame()` or an appropriate parent container component.
 5. **Memory & Performance**:
