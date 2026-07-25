@@ -46,6 +46,17 @@ class UiTextTest {
     }
 
     @Test
+    void translatesTheRepeaterInsertMenu() {
+        assertEquals("Insertar", UiText.get(UiLanguage.SPANISH, "Insert"));
+        assertEquals("Sin carpeta", UiText.get(UiLanguage.SPANISH, "Ungrouped"));
+        assertEquals("No hay variables definidas",
+                UiText.get(UiLanguage.SPANISH, "No variables defined"));
+        assertEquals("Coloca el cursor en la petición primero.",
+                UiText.get(UiLanguage.SPANISH, "Place the cursor in the request first."));
+        assertEquals("Insert", UiText.get(UiLanguage.ENGLISH, "Insert"));
+    }
+
+    @Test
     void translatesProgressiveDisclosureControls() {
         assertEquals("Automatización",
                 UiText.get(UiLanguage.SPANISH, "Automation"));

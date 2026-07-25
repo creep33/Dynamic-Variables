@@ -60,6 +60,8 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
 
         if (reqResp.selectionContext() == MessageEditorHttpRequestResponse.SelectionContext.REQUEST) {
             if (isMaterializationContext(event.toolType(), event.invocationType(), reqResp.selectionContext())) {
+                items.add(buildInsertMenu(reqResp));
+
                 JMenuItem materializeItem = new JMenuItem(text("Replace variables with their values..."));
                 materializeItem.setEnabled(hasAnyPlaceholder(reqResp.requestResponse().request()));
                 materializeItem.setToolTipText(text("Converts the placeholders in this request to plain-text values."));
@@ -82,6 +84,92 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         return toolType == ToolType.REPEATER
                 && invocationType == InvocationType.MESSAGE_EDITOR_REQUEST
                 && selectionContext == MessageEditorHttpRequestResponse.SelectionContext.REQUEST;
+    }
+
+    private JMenu buildInsertMenu(MessageEditorHttpRequestResponse reqResp) {
+        JMenu insertMenu = new JMenu(text("Insert"));
+        List<String> folders = new ArrayList<>();
+        folders.add("");
+        folders.addAll(variableManager.getFolderNames());
+
+        boolean anyVariable = false;
+        for (String folder : folders) {
+            List<String> localNames = variableManager.getVariableNamesInFolder(folder);
+            if (localNames.isEmpty()) continue;
+            anyVariable = true;
+
+            JMenu folderMenu = new JMenu(folder.isEmpty() ? text("Ungrouped") : folder);
+            for (String localName : localNames) {
+                String qualifiedName = variableManager.qualifyVariableName(folder, localName);
+                JMenuItem variableItem = new JMenuItem(variableManager.placeholderFor(qualifiedName));
+                variableItem.setToolTipText(variableValueTooltip(qualifiedName));
+                variableItem.addActionListener(e -> insertPlaceholderIntoRequest(reqResp, qualifiedName));
+                folderMenu.add(variableItem);
+            }
+            insertMenu.add(folderMenu);
+        }
+
+        if (!anyVariable) {
+            JMenuItem emptyItem = new JMenuItem(text("No variables defined"));
+            emptyItem.setEnabled(false);
+            insertMenu.add(emptyItem);
+        }
+        return insertMenu;
+    }
+
+    private String variableValueTooltip(String qualifiedName) {
+        String value = variableManager.getVariables().get(qualifiedName);
+        if (value == null || value.isEmpty()) return text("No value");
+        // Burp renders extension tooltips as plain text, so long values are truncated
+        // instead of wrapped, exactly like the variable list in the request sub-tab.
+        return value.length() > 200 ? value.substring(0, 200) + "..." : value;
+    }
+
+    private void insertPlaceholderIntoRequest(MessageEditorHttpRequestResponse reqResp, String qualifiedName) {
+        HttpRequest request = reqResp.requestResponse().request();
+        String rawRequest = new String(request.toByteArray().getBytes(), StandardCharsets.UTF_8);
+
+        int start;
+        int end;
+        Optional<Range> selectionOffsets = reqResp.selectionOffsets();
+        if (selectionOffsets.isPresent()
+                && selectionOffsets.get().startIndexInclusive() < selectionOffsets.get().endIndexExclusive()) {
+            // Pretty views renumber offsets, so resolve the selected text against the raw
+            // request instead of trusting the reported range.
+            Range range = selectionOffsets.get();
+            int reportedStart = range.startIndexInclusive();
+            int reportedEnd = Math.min(range.endIndexExclusive(), rawRequest.length());
+            String selectedText = reportedStart >= 0 && reportedEnd > reportedStart
+                    ? rawRequest.substring(reportedStart, reportedEnd)
+                    : "";
+            start = VariableManager.locateSelection(
+                    rawRequest, selectedText, reportedStart, reportedEnd);
+            end = start < 0 ? -1 : start + selectedText.length();
+        } else {
+            start = reqResp.caretPosition();
+            end = start;
+        }
+
+        String placeholder = variableManager.placeholderFor(qualifiedName);
+        String updatedRequest = insertPlaceholderAt(rawRequest, placeholder, start, end);
+        if (updatedRequest == null) {
+            JOptionPane.showMessageDialog(
+                    api.userInterface().swingUtils().suiteFrame(),
+                    text("Place the cursor in the request first."),
+                    text("Error"), JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        ByteArray contents = ByteArray.byteArray(updatedRequest.getBytes(StandardCharsets.UTF_8));
+        reqResp.setRequest(request.httpService() == null
+                ? HttpRequest.httpRequest(contents)
+                : HttpRequest.httpRequest(request.httpService(), contents));
+    }
+
+    static String insertPlaceholderAt(String rawRequest, String placeholder, int start, int end) {
+        if (rawRequest == null || placeholder == null) return null;
+        if (start < 0 || end < start || end > rawRequest.length()) return null;
+        return rawRequest.substring(0, start) + placeholder + rawRequest.substring(end);
     }
 
     private boolean hasAnyPlaceholder(HttpRequest request) {

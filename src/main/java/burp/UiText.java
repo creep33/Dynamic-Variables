@@ -280,7 +280,10 @@ final class UiText {
                     "Cada zona de extracción debe tener una expresión regular válida con al menos un grupo de captura."),
             Map.entry("The variable \"%s\" already exists in this folder. Choose whether to update, add an additional extraction zone, or create a new variable.",
                     "La variable \"%s\" ya existe en esta carpeta. Elige si quieres actualizarla, añadir una zona de extracción adicional o crear otra variable."),
-            Map.entry("Variable refreshed successfully: ", "Variable actualizada correctamente: ")
+            Map.entry("Variable refreshed successfully: ", "Variable actualizada correctamente: "),
+            Map.entry("No variables defined", "No hay variables definidas"),
+            Map.entry("Place the cursor in the request first.",
+                    "Coloca el cursor en la petición primero.")
     );
 
     private UiText() {}

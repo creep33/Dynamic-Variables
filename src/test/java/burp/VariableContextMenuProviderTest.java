@@ -45,6 +45,31 @@ class VariableContextMenuProviderTest {
     }
 
     @Test
+    void insertsAPlaceholderAtTheCaretAndOverAnExistingSelection() {
+        String request = "GET / HTTP/1.1\r\nAuthorization: Bearer \r\n\r\n";
+
+        int caret = request.indexOf("Bearer ") + "Bearer ".length();
+        assertEquals("GET / HTTP/1.1\r\nAuthorization: Bearer {{token}}\r\n\r\n",
+                VariableContextMenuProvider.insertPlaceholderAt(request, "{{token}}", caret, caret));
+
+        String withValue = "GET / HTTP/1.1\r\nAuthorization: Bearer eyJhbGc\r\n\r\n";
+        int start = withValue.indexOf("eyJhbGc");
+        assertEquals("GET / HTTP/1.1\r\nAuthorization: Bearer {{alice.jwt}}\r\n\r\n",
+                VariableContextMenuProvider.insertPlaceholderAt(
+                        withValue, "{{alice.jwt}}", start, start + "eyJhbGc".length()));
+    }
+
+    @Test
+    void refusesToInsertWhenTheOffsetsAreOutOfRange() {
+        String request = "GET / HTTP/1.1\r\n\r\n";
+
+        assertNull(VariableContextMenuProvider.insertPlaceholderAt(request, "{{token}}", -1, -1));
+        assertNull(VariableContextMenuProvider.insertPlaceholderAt(
+                request, "{{token}}", 0, request.length() + 1));
+        assertNull(VariableContextMenuProvider.insertPlaceholderAt(request, "{{token}}", 5, 2));
+    }
+
+    @Test
     void resolvesNativeEditorSelectionsAgainstTheRawMessage() {
         String message = "HTTP/1.1 200 OK\r\nSet-Cookie: session=abc123\r\n\r\n{\n  \"token\": \"abc123\"\n}";
 
