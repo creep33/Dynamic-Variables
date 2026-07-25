@@ -1434,7 +1434,9 @@ public final class VariableManager {
             savedRequestLabel.setText(text("Saved Request: None"));
             refreshRequestButton.setEnabled(false);
             sendToRepeaterButton.setEnabled(false);
-            editRequestButton.setEnabled(false);
+            // No saved request yet: the editor still opens on a blank template so the
+            // request can be crafted from scratch. The other buttons need a real request.
+            editRequestButton.setEnabled(true);
             updateRuleButton.setEnabled(false);
         } else {
             try {
@@ -1450,7 +1452,8 @@ public final class VariableManager {
                 savedRequestLabel.setText(text("Saved Request: Error parsing request data"));
                 refreshRequestButton.setEnabled(false);
                 sendToRepeaterButton.setEnabled(false);
-                editRequestButton.setEnabled(false);
+                // Unparseable stored data: allow the editor so the request can be rewritten.
+                editRequestButton.setEnabled(true);
                 updateRuleButton.setEnabled(false);
             }
         }
@@ -1786,12 +1789,28 @@ public final class VariableManager {
         int selectedRow = variablesTable.getSelectedRow();
         String name = tableModel.variableKeyAt(selectedRow);
         if (name == null) return;
-        VariableExtractionRule rule = rules.get(name);
-        if (rule == null || rule.getSavedRequestBase64().isEmpty()) return;
+        // A variable without a saved refresh request must still be able to craft one from
+        // scratch, so create the rule on demand instead of refusing to open the editor.
+        VariableExtractionRule existingRule = rules.get(name);
+        VariableExtractionRule rule = existingRule != null ? existingRule : new VariableExtractionRule();
 
         try {
-            byte[] requestBytes = Base64.getDecoder().decode(rule.getSavedRequestBase64());
-            HttpRequest savedRequest = HttpRequest.httpRequest(ByteArray.byteArray(requestBytes));
+            String savedRequestBase64 = rule.getSavedRequestBase64();
+            HttpRequest savedRequest = null;
+            if (savedRequestBase64 != null && !savedRequestBase64.isEmpty()) {
+                try {
+                    byte[] requestBytes = Base64.getDecoder().decode(savedRequestBase64);
+                    savedRequest = HttpRequest.httpRequest(ByteArray.byteArray(requestBytes));
+                } catch (Exception ex) {
+                    api.logging().logToError("Stored refresh request could not be decoded for "
+                            + name + ", starting from a blank template: " + ex.getMessage());
+                }
+            }
+            String seedHost = rule.getSavedHost() == null ? "" : rule.getSavedHost();
+            if (savedRequest == null) {
+                savedRequest = HttpRequest.httpRequest(
+                        "GET / HTTP/1.1\r\nHost: " + seedHost + "\r\n\r\n");
+            }
 
             JDialog editDialog = new JDialog(api.userInterface().swingUtils().suiteFrame(), text("Edit Saved Request - ") + name, Dialog.ModalityType.APPLICATION_MODAL);
             editDialog.setLayout(new BorderLayout(10, 10));
@@ -1813,7 +1832,9 @@ public final class VariableManager {
 
             hgbc.gridx = 2; hgbc.weightx = 0.0;
             headerPanel.add(new JLabel(text("Port:")), hgbc);
-            JTextField portField = new JTextField(String.valueOf(rule.getSavedPort()));
+            JTextField portField = new JTextField(rule.getSavedPort() > 0
+                    ? String.valueOf(rule.getSavedPort())
+                    : (rule.isSavedSecure() ? "443" : "80"));
             hgbc.gridx = 3; hgbc.weightx = 0.5;
             headerPanel.add(portField, hgbc);
 
@@ -1883,6 +1904,11 @@ public final class VariableManager {
                     rule.setSavedHost(newHost);
                     rule.setSavedPort(newPort);
                     rule.setSavedSecure(newSecure);
+                    // The rule may have been created by this dialog, so attach it to the
+                    // runtime map and its definition before persisting.
+                    rules.put(name, rule);
+                    VariableDefinition definition = findDefinitionByKey(name);
+                    if (definition != null) definition.setRule(rule);
                     savePreferences();
                 }
                 editDialog.dispose();
@@ -2189,8 +2215,8 @@ public final class VariableManager {
         selectionTimer.stop();
     }
 
-    private int locateSelection(String rawMessage, String selectedText,
-                                int reportedStart, int reportedEnd) {
+    static int locateSelection(String rawMessage, String selectedText,
+                               int reportedStart, int reportedEnd) {
         if (reportedStart >= 0 && reportedEnd >= reportedStart
                 && reportedEnd <= rawMessage.length()
                 && rawMessage.substring(reportedStart, reportedEnd).equals(selectedText)) {

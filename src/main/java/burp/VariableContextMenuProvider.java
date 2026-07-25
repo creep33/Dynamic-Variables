@@ -1,15 +1,22 @@
 package burp;
 
 import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.core.ByteArray;
 import burp.api.montoya.core.Range;
 import burp.api.montoya.core.ToolType;
 import burp.api.montoya.http.message.HttpHeader;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.http.message.requests.HttpRequest;
+import burp.api.montoya.http.message.responses.HttpResponse;
+import burp.api.montoya.ui.Selection;
 import burp.api.montoya.ui.contextmenu.ContextMenuEvent;
 import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider;
 import burp.api.montoya.ui.contextmenu.InvocationType;
 import burp.api.montoya.ui.contextmenu.MessageEditorHttpRequestResponse;
+import burp.api.montoya.ui.editor.Editor;
+import burp.api.montoya.ui.editor.EditorOptions;
+import burp.api.montoya.ui.editor.HttpRequestEditor;
+import burp.api.montoya.ui.editor.HttpResponseEditor;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -24,6 +31,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public class VariableContextMenuProvider implements ContextMenuItemsProvider {
@@ -1163,23 +1171,60 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         instructions.setBorder(new EmptyBorder(8, 8, 0, 8));
         selector.add(instructions, BorderLayout.NORTH);
 
-        JTextArea messageArea = new JTextArea(rawMessage);
-        messageArea.setEditable(false);
-        messageArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
-        messageArea.setCaretPosition(0);
-        selector.add(new JScrollPane(messageArea), BorderLayout.CENTER);
+        // Burp's native message editor so the value can be selected from Pretty as well
+        // as Raw, exactly like the "Update Rule from Response..." selector does.
+        byte[] messageBytes = rawMessage.getBytes(StandardCharsets.UTF_8);
+        Editor messageEditor;
+        if (requestContent) {
+            HttpRequestEditor requestEditor = api.userInterface()
+                    .createHttpRequestEditor(EditorOptions.READ_ONLY);
+            requestEditor.setRequest(HttpRequest.httpRequest(ByteArray.byteArray(messageBytes)));
+            messageEditor = requestEditor;
+        } else {
+            HttpResponseEditor responseEditor = api.userInterface()
+                    .createHttpResponseEditor(EditorOptions.READ_ONLY);
+            responseEditor.setResponse(HttpResponse.httpResponse(ByteArray.byteArray(messageBytes)));
+            messageEditor = responseEditor;
+        }
+        selector.add(messageEditor.uiComponent(), BorderLayout.CENTER);
+
+        // Native editors don't expose a caret listener, so poll their selection while
+        // this modal dialog is open and remember the last non-empty one.
+        String[] lastSelectedText = {""};
+        int[] lastSelectionStart = {-1};
+        javax.swing.Timer selectionTimer = new javax.swing.Timer(150, event -> {
+            Optional<Selection> currentSelection = messageEditor.selection();
+            if (currentSelection.isEmpty()) return;
+            Selection selection = currentSelection.get();
+            String selectedText = new String(
+                    selection.contents().getBytes(), StandardCharsets.UTF_8);
+            if (selectedText.isEmpty()) return;
+            lastSelectedText[0] = selectedText;
+            lastSelectionStart[0] = selection.offsets().startIndexInclusive();
+        });
+        selectionTimer.start();
 
         JButton useSelection = new JButton(text("Use selected value"));
         useSelection.addActionListener(e -> {
-            int selectionStart = messageArea.getSelectionStart();
-            int selectionEnd = messageArea.getSelectionEnd();
-            if (selectionStart >= selectionEnd) {
+            String selectedText = lastSelectedText[0];
+            if (selectedText.isEmpty()) {
                 JOptionPane.showMessageDialog(selector,
                         text("Select a value in the message first."),
                         text("Error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
-            result[0] = analyzeSelection(rawMessage, selectionStart, selectionEnd, requestContent);
+            // Pretty views renumber offsets, so resolve the selection against the raw message.
+            int start = VariableManager.locateSelection(
+                    rawMessage, selectedText, lastSelectionStart[0],
+                    lastSelectionStart[0] + selectedText.length());
+            if (start < 0) {
+                JOptionPane.showMessageDialog(selector,
+                        text("Select a value in the message first."),
+                        text("Error"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            result[0] = analyzeSelection(
+                    rawMessage, start, start + selectedText.length(), requestContent);
             selector.dispose();
         });
         JButton cancel = new JButton(text("Cancel"));
@@ -1189,6 +1234,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         buttons.add(cancel);
         selector.add(buttons, BorderLayout.SOUTH);
         selector.setVisible(true);
+        selectionTimer.stop();
         return result[0];
     }
 
