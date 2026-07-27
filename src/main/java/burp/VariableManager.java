@@ -135,6 +135,12 @@ public final class VariableManager {
     private JPanel totpValuePanel;
     private JButton rotateTotpButton;
     private JPanel automationDetailsPanel;
+    private JPanel totpConfigDetailsPanel;
+    private JTextField totpSecretField;
+    private JComboBox<Integer> totpDigitsComboBox;
+    private JTextField totpPeriodField;
+    private JComboBox<String> totpAlgorithmComboBox;
+    private JButton saveTotpConfigButton;
 
     public VariableManager(MontoyaApi api) {
         this.api = api;
@@ -1242,6 +1248,53 @@ public final class VariableManager {
         automationDetailsPanel = automationDetails;
         detailsTabs.addTab(text("Automation"), automationDetails);
 
+        // 2FA Configuration tab panel
+        JPanel totpConfigPanel = new JPanel(new GridBagLayout());
+        totpConfigPanel.setBorder(new EmptyBorder(12, 15, 12, 15));
+        tgbc = new GridBagConstraints();
+        tgbc.fill = GridBagConstraints.HORIZONTAL;
+        tgbc.insets = new Insets(6, 6, 6, 6);
+        tgbc.anchor = GridBagConstraints.NORTHWEST;
+
+        tgbc.gridx = 0; tgbc.gridy = 0; tgbc.weightx = 0.0;
+        totpConfigPanel.add(new JLabel(text("2FA Secret (Base32):")), tgbc);
+        totpSecretField = new JTextField(24);
+        tgbc.gridx = 1; tgbc.weightx = 1.0;
+        totpConfigPanel.add(totpSecretField, tgbc);
+
+        tgbc.gridx = 0; tgbc.gridy = 1; tgbc.weightx = 0.0;
+        totpConfigPanel.add(new JLabel(text("Digits:")), tgbc);
+        totpDigitsComboBox = new JComboBox<>(new Integer[]{6, 7, 8});
+        tgbc.gridx = 1; tgbc.weightx = 1.0;
+        totpConfigPanel.add(totpDigitsComboBox, tgbc);
+
+        tgbc.gridx = 0; tgbc.gridy = 2; tgbc.weightx = 0.0;
+        totpConfigPanel.add(new JLabel(text("Period (seconds):")), tgbc);
+        totpPeriodField = new JTextField(String.valueOf(TotpGenerator.DEFAULT_PERIOD_SECONDS), 10);
+        tgbc.gridx = 1; tgbc.weightx = 1.0;
+        totpConfigPanel.add(totpPeriodField, tgbc);
+
+        tgbc.gridx = 0; tgbc.gridy = 3; tgbc.weightx = 0.0;
+        totpConfigPanel.add(new JLabel(text("Algorithm:")), tgbc);
+        totpAlgorithmComboBox = new JComboBox<>(new String[]{"SHA1", "SHA256", "SHA512"});
+        tgbc.gridx = 1; tgbc.weightx = 1.0;
+        totpConfigPanel.add(totpAlgorithmComboBox, tgbc);
+
+        tgbc.gridx = 1; tgbc.gridy = 4; tgbc.weightx = 1.0;
+        saveTotpConfigButton = new JButton(text("Save Changes"));
+        saveTotpConfigButton.addActionListener(e -> saveTotpConfig());
+        JPanel saveButtonWrapper = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        saveButtonWrapper.add(saveTotpConfigButton);
+        totpConfigPanel.add(saveButtonWrapper, tgbc);
+
+        // Vertical filler
+        tgbc.gridx = 0; tgbc.gridy = 5; tgbc.weighty = 1.0; tgbc.gridwidth = 2;
+        totpConfigPanel.add(new JPanel(), tgbc);
+
+        JPanel totpContainer = new JPanel(new BorderLayout());
+        totpContainer.add(totpConfigPanel, BorderLayout.NORTH);
+        totpConfigDetailsPanel = totpContainer;
+
         JPanel emptyDetailsPanel = new JPanel(new GridBagLayout());
         JPanel emptyMessagePanel = new JPanel();
         emptyMessagePanel.setLayout(new BoxLayout(emptyMessagePanel, BoxLayout.Y_AXIS));
@@ -1597,6 +1650,14 @@ public final class VariableManager {
         boolean totpVariable = selectedDefinition != null && selectedDefinition.isTotpVariable();
 
         setTotpDetailsVisible(totpVariable);
+
+        if (totpVariable && selectedDefinition != null) {
+            TotpGenerator.TotpConfig cfg = selectedDefinition.getTotpConfig();
+            totpSecretField.setText(cfg.secret());
+            totpDigitsComboBox.setSelectedItem(cfg.digits());
+            totpPeriodField.setText(String.valueOf(cfg.periodSeconds()));
+            totpAlgorithmComboBox.setSelectedItem(cfg.algorithm());
+        }
 
         isUpdatingUI = true;
         valueTextArea.setText(val);
@@ -2941,18 +3002,60 @@ public final class VariableManager {
      * response, so the Automation tab is removed instead of just disabled.
      */
     private void setTotpDetailsVisible(boolean totpVariable) {
-        if (detailsTabs == null || automationDetailsPanel == null) return;
+        if (detailsTabs == null || automationDetailsPanel == null || totpConfigDetailsPanel == null) return;
         valueHint.setText(totpVariable
                 ? text("The value rotates automatically every time it is used.")
                 : text("Changes are saved automatically."));
         totpValuePanel.setVisible(totpVariable);
 
         int automationIndex = detailsTabs.indexOfComponent(automationDetailsPanel);
+        int totpConfigIndex = detailsTabs.indexOfComponent(totpConfigDetailsPanel);
+
         if (totpVariable) {
             if (automationIndex >= 0) detailsTabs.removeTabAt(automationIndex);
-        } else if (automationIndex < 0) {
-            detailsTabs.addTab(text("Automation"), automationDetailsPanel);
+            if (totpConfigIndex < 0) detailsTabs.addTab(text("2FA Configuration"), totpConfigDetailsPanel);
+        } else {
+            if (totpConfigIndex >= 0) detailsTabs.removeTabAt(totpConfigIndex);
+            if (automationIndex < 0) detailsTabs.addTab(text("Automation"), automationDetailsPanel);
         }
+    }
+
+    private void saveTotpConfig() {
+        int selectedRow = variablesTable.getSelectedRow();
+        if (selectedRow < 0) return;
+        String name = tableModel.variableKeyAt(selectedRow);
+        if (name == null) return;
+        VariableDefinition definition = findDefinitionByKey(name);
+        if (definition == null || !definition.isTotpVariable()) return;
+
+        String secret = totpSecretField.getText().trim();
+        try {
+            TotpGenerator.decodeBase32(secret);
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(mainPanel,
+                    text("Invalid 2FA secret. Use Base32 characters (A-Z, 2-7)."),
+                    text("Error"), JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        int digits = (Integer) totpDigitsComboBox.getSelectedItem();
+        int period = 30;
+        try {
+            period = Integer.parseInt(totpPeriodField.getText().trim());
+            if (period <= 0) period = 30;
+        } catch (NumberFormatException ignored) {}
+
+        String algorithm = (String) totpAlgorithmComboBox.getSelectedItem();
+
+        TotpGenerator.TotpConfig newConfig = new TotpGenerator.TotpConfig(secret, digits, period, algorithm);
+        definition.setTotpConfig(newConfig);
+        savePreferences();
+        synchronized (lock) {
+            refreshTotpValues();
+        }
+        updateDetailsPanel(selectedRow);
+        tableModel.fireTableDataChanged();
+        showTemporaryStatus(text("2FA configuration updated."));
     }
 
     private void rotateSelectedTotpValue() {

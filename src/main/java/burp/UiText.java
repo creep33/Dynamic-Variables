@@ -299,6 +299,8 @@ final class UiText {
             Map.entry("Setup 2FA", "Añadir variable 2FA"),
             Map.entry("Add 2FA variable", "Añadir variable 2FA"),
             Map.entry("Add 2FA Variable", "Añadir variable 2FA"),
+            Map.entry("2FA Configuration", "Configuración 2FA"),
+            Map.entry("2FA configuration updated.", "Configuración 2FA actualizada."),
             Map.entry("Creates a variable whose value is a 2FA code computed from a secret.",
                     "Crea una variable cuyo valor es un código 2FA calculado a partir de un secreto."),
             Map.entry("2FA Secret (Base32):", "Secreto 2FA (Base32):"),
