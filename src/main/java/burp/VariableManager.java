@@ -93,6 +93,7 @@ public final class VariableManager {
     private JTextField matchUrlField;
     private JLabel matchStrategyLabel;
     private JButton convertMatchButton;
+    private JButton autofillMatchButton;
     private JTextField matchMethodField;
     private JTextField matchHostField;
     private JTextField matchPortField;
@@ -1098,8 +1099,11 @@ public final class VariableManager {
         matchStrategyLabel = new JLabel();
         convertMatchButton = new JButton(text("Convert to explicit filters"));
         convertMatchButton.addActionListener(e -> convertActiveRuleToExplicitMatch());
+        autofillMatchButton = new JButton(text("Autofill from saved request"));
+        autofillMatchButton.addActionListener(e -> autofillExplicitFiltersFromSavedRequest());
         strategyPanel.add(matchStrategyLabel);
         strategyPanel.add(convertMatchButton);
+        strategyPanel.add(autofillMatchButton);
         pgbc.gridx = 1;
         pgbc.weightx = 1.0;
         passiveMatchingPanel.add(strategyPanel, pgbc);
@@ -1703,7 +1707,10 @@ public final class VariableManager {
             case LEGACY_EXACT -> text("Legacy exact saved request matching");
             case LEGACY_PATH -> text("Legacy path regex matching");
         });
+        boolean hasSavedRequest = rule != null && rule.getSavedRequestBase64() != null && !rule.getSavedRequestBase64().isEmpty();
         convertMatchButton.setVisible(!explicit);
+        autofillMatchButton.setVisible(explicit);
+        autofillMatchButton.setEnabled(explicit && hasSavedRequest);
         setMatchFieldsEnabled(explicit);
         matchMethodField.setText(rule.getMatchMethod());
         matchHostField.setText(rule.getMatchHost());
@@ -1790,6 +1797,8 @@ public final class VariableManager {
         displayExpirySignal(null, false);
         matchStrategyLabel.setText("");
         convertMatchButton.setVisible(false);
+        autofillMatchButton.setVisible(false);
+        autofillMatchButton.setEnabled(false);
         setMatchFieldsEnabled(false);
         matchMethodField.setText("");
         matchHostField.setText("");
@@ -2088,6 +2097,13 @@ public final class VariableManager {
         queryField.setEnabled(enabled);
         discriminatorSourceComboBox.setEnabled(enabled);
         discriminatorRegexField.setEnabled(enabled);
+        if (autofillMatchButton != null) {
+            int selectedRow = variablesTable.getSelectedRow();
+            String name = selectedRow >= 0 ? tableModel.variableKeyAt(selectedRow) : null;
+            VariableExtractionRule rule = name != null ? rules.get(name) : null;
+            boolean hasSavedRequest = rule != null && rule.getSavedRequestBase64() != null && !rule.getSavedRequestBase64().isEmpty();
+            autofillMatchButton.setEnabled(enabled && hasSavedRequest);
+        }
     }
 
     private void convertActiveRuleToExplicitMatch() {
@@ -2125,6 +2141,45 @@ public final class VariableManager {
             savePreferences();
         }
         updateDetailsPanel(selectedRow);
+    }
+
+    private void autofillExplicitFiltersFromSavedRequest() {
+        int selectedRow = variablesTable.getSelectedRow();
+        if (selectedRow < 0) return;
+        String name = tableModel.variableKeyAt(selectedRow);
+        if (name == null) return;
+        synchronized (lock) {
+            VariableExtractionRule rule = rules.get(name);
+            if (rule == null || rule.getSavedRequestBase64() == null || rule.getSavedRequestBase64().isEmpty()) {
+                JOptionPane.showMessageDialog(mainPanel, text("No saved request available for this variable."), text("Autofill Error"), JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            try {
+                byte[] requestBytes = Base64.getDecoder().decode(rule.getSavedRequestBase64());
+                HttpRequest request = HttpRequest.httpRequest(ByteArray.byteArray(requestBytes));
+                String method = request.method();
+                String host = rule.getSavedHost();
+                int port = rule.getSavedPort();
+                boolean secure = rule.isSavedSecure();
+                String fullPath = request.path();
+                int queryAt = fullPath.indexOf('?');
+                String path = queryAt < 0 ? fullPath : fullPath.substring(0, queryAt);
+
+                matchMethodField.setText(method != null ? method : "");
+                matchHostField.setText(host != null ? host : "");
+                matchPortField.setText(port > 0 ? String.valueOf(port) : (secure ? "443" : "80"));
+                matchSecureCheckBox.setSelected(secure);
+                pathModeComboBox.setSelectedIndex(0); // Literal
+                matchUrlField.setText(path != null ? path : "");
+
+                updateActiveRuleFromUI();
+                savePreferences();
+            } catch (Exception ex) {
+                api.logging().logToError("Error autofilling filters from saved request: " + ex.getMessage());
+                JOptionPane.showMessageDialog(mainPanel, text("Failed to extract details from saved request."), text("Autofill Error"), JOptionPane.ERROR_MESSAGE);
+            }
+        }
     }
 
     private void triggerSendToRepeater() {
