@@ -115,7 +115,7 @@ final class UiText {
             Map.entry("Optional. Searched inside the response header block. Empty does not filter.", "Opcional. Se busca dentro del bloque de cabeceras de la respuesta. Vacío no filtra."),
             Map.entry("Response body filter:", "Filtro de cuerpo de respuesta:"),
             Map.entry("Optional. Searched inside the response body. Empty does not filter.", "Opcional. Se busca dentro del cuerpo de la respuesta. Vacío no filtra."),
-            Map.entry("The session is expired when the filter does NOT match", "La sesión ha expirado cuando el filtro NO casa"),
+            Map.entry("The session is expired when the filter does NOT match", "La sesión ha expirado cuando el filtro NO coincide."),
             Map.entry("Inverts the verdict of the whole signal, not of individual fields.", "Invierte el veredicto de la señal completa, no el de cada campo."),
             Map.entry("Codes other than 401 and 403 require a header or body filter; this signal is ignored.", "Los códigos distintos de 401 y 403 requieren un filtro de cabecera o cuerpo; esta señal se ignora."),
             Map.entry("In session recovery, allow retrying non-idempotent requests", "En la recuperación de sesión, permitir reintentar peticiones no idempotentes"),

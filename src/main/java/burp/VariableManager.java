@@ -87,6 +87,8 @@ public final class VariableManager {
     // Rule Panel Components
     private JCheckBox ruleEnabledCheckBox;
     private JCheckBox automaticRefreshCheckBox;
+    private JButton advancedRecoveryButton;
+    private JPanel advancedRecoveryPanel;
     private JCheckBox allowNonIdempotentReplayCheckBox;
     private JTextField matchUrlField;
     private JLabel matchStrategyLabel;
@@ -841,12 +843,29 @@ public final class VariableManager {
         rulePanel.add(passiveExtractionExplanation);
         rulePanel.add(Box.createVerticalStrut(6));
 
+        JPanel recoveryTogglePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        recoveryTogglePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        
         automaticRefreshCheckBox = new JCheckBox(text("Use this variable for expired-session recovery"));
         automaticRefreshCheckBox.setToolTipText(text(
                 "Requires global session recovery, recovery for the current Burp tool, and a saved refresh request."));
-        automaticRefreshCheckBox.addActionListener(e -> handleRuleActivation(automaticRefreshCheckBox, true));
-        automaticRefreshCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        rulePanel.add(automaticRefreshCheckBox);
+        automaticRefreshCheckBox.addActionListener(e -> {
+            handleRuleActivation(automaticRefreshCheckBox, true);
+            if (advancedRecoveryButton != null) {
+                advancedRecoveryButton.setEnabled(automaticRefreshCheckBox.isSelected());
+            }
+        });
+        
+        advancedRecoveryButton = new JButton("⚙");
+        advancedRecoveryButton.setToolTipText(text("Configure advanced session recovery options"));
+        advancedRecoveryButton.setMargin(new Insets(2, 4, 2, 4));
+        advancedRecoveryButton.addActionListener(e -> showAdvancedRecoveryDialog());
+        
+        recoveryTogglePanel.add(automaticRefreshCheckBox);
+        recoveryTogglePanel.add(Box.createHorizontalStrut(5));
+        recoveryTogglePanel.add(advancedRecoveryButton);
+        rulePanel.add(recoveryTogglePanel);
+        
         JLabel sessionRecoveryExplanation = automationExplanationLabel(text(
                 "After a configured status, the saved request obtains a new value and the original request is retried."));
         sessionRecoveryExplanation.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -948,9 +967,10 @@ public final class VariableManager {
         allowNonIdempotentReplayCheckBox.addActionListener(e -> updateActiveRuleFromUI());
         tgbc.gridy = 1;
         retrySafetyPanel.add(allowNonIdempotentReplayCheckBox, tgbc);
+        advancedRecoveryPanel = new JPanel(new GridBagLayout());
         rgbc.gridy = 0;
         rgbc.gridwidth = 2;
-        advancedMatchPanel.add(retrySafetyPanel, rgbc);
+        advancedRecoveryPanel.add(retrySafetyPanel, rgbc);
 
         JPanel expiryPanel = new JPanel(new GridBagLayout());
         expiryPanel.setBorder(BorderFactory.createTitledBorder(text("Session expiry signal")));
@@ -1199,8 +1219,8 @@ public final class VariableManager {
         rgbc.weightx = 1.0;
         advancedMatchPanel.add(passiveMatchingPanel, rgbc);
 
-        rgbc.gridy = 2;
-        advancedMatchPanel.add(expiryPanel, rgbc);
+        rgbc.gridy = 1;
+        advancedRecoveryPanel.add(expiryPanel, rgbc);
 
         advancedMatchPanel.setVisible(false);
         advancedMatchToggle.addActionListener(e ->
@@ -1606,6 +1626,9 @@ public final class VariableManager {
             ruleEnabledCheckBox.setEnabled(false);
             automaticRefreshCheckBox.setSelected(false);
             automaticRefreshCheckBox.setEnabled(false);
+            if (advancedRecoveryButton != null) {
+                advancedRecoveryButton.setEnabled(false);
+            }
             allowNonIdempotentReplayCheckBox.setSelected(false);
             allowNonIdempotentReplayCheckBox.setEnabled(false);
             setMatchFieldsEnabled(false);
@@ -1664,6 +1687,9 @@ public final class VariableManager {
         ruleEnabledCheckBox.setSelected(!totpVariable && rule.isEnabled());
         automaticRefreshCheckBox.setEnabled(!totpVariable);
         automaticRefreshCheckBox.setSelected(!totpVariable && rule.isAutomaticRefreshEnabled());
+        if (advancedRecoveryButton != null) {
+            advancedRecoveryButton.setEnabled(automaticRefreshCheckBox.isSelected());
+        }
         allowNonIdempotentReplayCheckBox.setEnabled(!totpVariable);
         allowNonIdempotentReplayCheckBox.setSelected(!totpVariable && rule.isAllowNonIdempotentReplay());
         // A 2FA variable is computed from its secret, so it never recovers a session over the wire.
@@ -1738,6 +1764,10 @@ public final class VariableManager {
         isUpdatingUI = false;
     }
 
+    private void showAdvancedRecoveryDialog() {
+        JOptionPane.showMessageDialog(mainPanel, advancedRecoveryPanel, text("Advanced Session Recovery Options"), JOptionPane.PLAIN_MESSAGE);
+    }
+
     private void setAdvancedMatchingExpanded(boolean expanded) {
         if (advancedMatchToggle == null || advancedMatchPanel == null) return;
         advancedMatchToggle.setSelected(expanded);
@@ -1753,6 +1783,9 @@ public final class VariableManager {
         isUpdatingUI = true;
         ruleEnabledCheckBox.setSelected(false);
         automaticRefreshCheckBox.setSelected(false);
+        if (advancedRecoveryButton != null) {
+            advancedRecoveryButton.setEnabled(false);
+        }
         allowNonIdempotentReplayCheckBox.setSelected(false);
         displayExpirySignal(null, false);
         matchStrategyLabel.setText("");
@@ -4026,9 +4059,9 @@ public final class VariableManager {
                         String val = values.getOrDefault(name, "");
                         return val.length() > 50 ? val.substring(0, 47) + "..." : val;
                     case 2:
-                        // A 2FA variable always refreshes itself from its secret, so it is
-                        // auto-updating by definition even without an extraction rule.
-                        if (row.variable.isTotpVariable()) return text("Yes");
+                        // 2FA variables generate codes locally from their secret and do not extract
+                        // values from HTTP responses.
+                        if (row.variable.isTotpVariable()) return text("No");
                         VariableExtractionRule rule = rules.get(name);
                         return (rule != null && rule.isEnabled()) ? text("Yes") : text("No");
                 }

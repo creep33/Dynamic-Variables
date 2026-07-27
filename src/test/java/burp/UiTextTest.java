@@ -103,7 +103,7 @@ class UiTextTest {
                 UiText.get(UiLanguage.SPANISH, "Response header filter:"));
         assertEquals("Filtro de cuerpo de respuesta:",
                 UiText.get(UiLanguage.SPANISH, "Response body filter:"));
-        assertEquals("La sesión ha expirado cuando el filtro NO casa",
+        assertEquals("La sesión ha expirado cuando el filtro NO coincide.",
                 UiText.get(UiLanguage.SPANISH,
                         "The session is expired when the filter does NOT match"));
         assertEquals("Deja todos los campos vacíos para usar los códigos de estado globales.",

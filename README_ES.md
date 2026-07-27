@@ -180,7 +180,7 @@ Muchas aplicaciones no responden con `401` ni `403` cuando la sesión caduca. Un
 1. Selecciona la variable y abre **Mostrar opciones avanzadas de automatización**.
 2. Rellena **Códigos de estado de expiración:** con los códigos que indican la caducidad, por ejemplo `301, 302`. Déjalo vacío para aceptar cualquier código.
 3. Añade un **Filtro de cabecera de respuesta:** como `Location:\s*/login`, o un **Filtro de cuerpo de respuesta:** como `"error":"invalid_token"`.
-4. Opcionalmente activa **La sesión ha expirado cuando el filtro NO casa** para invertir el veredicto de la señal completa, útil cuando la caducidad se manifiesta por la *ausencia* de un marcador.
+4. Opcionalmente activa **La sesión ha expirado cuando el filtro NO coincide** para invertir el veredicto de la señal completa, útil cuando la caducidad se manifiesta por la *ausencia* de un marcador.
 
 Todos los campos rellenos deben coincidir. Ambos filtros se buscan dentro del contenido: **Literal** busca el texto en cualquier punto del bloque de cabeceras o del cuerpo, y **Expresión regular** busca una coincidencia, con `^` anclando en cada línea de cabecera. Esto se diferencia de los filtros de ruta y query del emparejamiento pasivo, donde **Literal** significa una comparación exacta.
 
