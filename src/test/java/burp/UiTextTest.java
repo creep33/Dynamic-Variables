@@ -66,7 +66,7 @@ class UiTextTest {
 
     @Test
     void translatesTheTwoFactorSetupDialog() {
-        assertEquals("Configurar 2FA", UiText.get(UiLanguage.SPANISH, "Setup 2FA"));
+        assertEquals("Añadir variable 2FA", UiText.get(UiLanguage.SPANISH, "Setup 2FA"));
         assertEquals("Secreto 2FA (Base32):",
                 UiText.get(UiLanguage.SPANISH, "2FA Secret (Base32):"));
         assertEquals("Código actual:", UiText.get(UiLanguage.SPANISH, "Current code:"));

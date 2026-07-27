@@ -43,7 +43,7 @@ Dynamic Variables is a Burp Suite extension that brings template variables and a
 | 14 | **Configurable Placeholder Tag** | Optionally require a custom tag such as `dv` so only `{{dv:variable_name}}` is substituted and unrelated `{{...}}` pentesting payloads remain untouched. |
 | 15 | **English and Spanish Interface** | Choose the language used throughout the extension from **Configuration...**. English is used by default and the selected language is saved between Burp sessions. |
 | 16 | **Multiple-value Extraction** | Enable an optional multiple-value mode while assigning a variable. Each named value keeps its own selection, source, and regex, and an editable template such as `{{value1}}; {{value2}}` composes the parent value. |
-| 17 | **2FA (TOTP) Variables** | Create a variable from **More...** → **Setup 2FA** whose value is the 2FA code computed from a Base32 secret. The code is recomputed every time the variable is used instead of rotating continuously in the background. |
+| 17 | **2FA (TOTP) Variables** | Create a variable from **Add...** → **Add 2FA variable** whose value is the 2FA code computed from a Base32 secret. The code is recomputed every time the variable is used instead of rotating continuously in the background. |
 | 18 | **Configurable Session Expiry Signal** | Detect expired sessions beyond `401`/`403`. Each rule can define its own **Session expiry signal** combining status codes with response header and body filters, for applications that answer with a `302` to `/login` instead. |
 
 ---
@@ -183,7 +183,7 @@ A variable without a signal keeps using the status codes from **Configuration...
 > When *follow redirects* is enabled in Repeater, the `302` never reaches the extension because Burp has already followed it. Either disable the option or match the login page with a body filter.
 
 ### 7. Creating a 2FA (TOTP) Variable
-1. Click **More...** in the Dynamic Variables tab and choose **Setup 2FA**.
+1. Click **Add...** in the Dynamic Variables tab and choose **Add 2FA variable**.
 2. Select the destination in **Folder:** and enter the **Variable name:**.
 3. Paste the **2FA Secret (Base32):** provided by the application. Only Base32 characters (`A-Z`, `2-7`) are accepted.
 4. Expand **Advanced** only if the service does not use the defaults of `SHA1`, `6` digits and a `30` second period. **Digits:**, **Period (seconds):** and **Algorithm:** are configurable there.

@@ -43,7 +43,7 @@ Dynamic Variables es una extensión para Burp Suite que incorpora variables de p
 | 14 | **Etiqueta de placeholder configurable** | Permite exigir una etiqueta personalizada como `dv`, de modo que solo se sustituya `{{dv:variable_name}}` y los demás payloads de pentesting con formato `{{...}}` permanezcan intactos. |
 | 15 | **Interfaz en inglés y español** | Permite elegir el idioma de toda la extensión desde **Configuración...**. El idioma predeterminado es inglés y la selección se conserva entre sesiones de Burp. |
 | 16 | **Extracción de múltiples valores** | Activa un modo múltiple opcional al asignar una variable. Cada valor nombrado conserva su selección, origen y regex, y una plantilla editable como `{{valor1}}; {{valor2}}` compone el valor de la variable padre. |
-| 17 | **Variables 2FA (TOTP)** | Crea una variable desde **Más...** → **Configurar 2FA** cuyo valor es el código 2FA calculado a partir de un secreto Base32. El código se recalcula cada vez que se usa la variable, en lugar de rotar continuamente en segundo plano. |
+| 17 | **Variables 2FA (TOTP)** | Crea una variable desde **Añadir...** → **Añadir variable 2FA** cuyo valor es el código 2FA calculado a partir de un secreto Base32. El código se recalcula cada vez que se usa la variable, en lugar de rotar continuamente en segundo plano. |
 | 18 | **Señal de expiración de sesión configurable** | Detecta sesiones caducadas más allá de `401`/`403`. Cada regla puede definir su propia **Señal de expiración de sesión**, combinando códigos de estado con filtros de cabecera y cuerpo de la respuesta, para aplicaciones que responden con un `302` hacia `/login`. |
 
 ---
@@ -192,7 +192,7 @@ Una variable sin señal sigue utilizando los códigos de estado de **Configuraci
 
 ### 7. Crear una variable 2FA (TOTP)
 
-1. Pulsa **Más...** en la pestaña Dynamic Variables y selecciona **Configurar 2FA**.
+1. Pulsa **Añadir...** en la pestaña Dynamic Variables y selecciona **Añadir variable 2FA**.
 2. Elige el destino en **Carpeta:** e introduce el **Nombre de variable:**.
 3. Pega el **Secreto 2FA (Base32):** que proporciona la aplicación. Solo se aceptan caracteres Base32 (`A-Z`, `2-7`).
 4. Despliega **Avanzado** únicamente si el servicio no utiliza los valores predeterminados de `SHA1`, `6` dígitos y periodo de `30` segundos. Allí se configuran **Dígitos:**, **Periodo (segundos):** y **Algoritmo:**.

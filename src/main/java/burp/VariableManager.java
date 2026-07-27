@@ -710,18 +710,26 @@ public final class VariableManager {
 
         // Buttons Panel under Table
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
-        JButton addFolderButton = new JButton(text("New Folder"));
-        JButton addButton = new JButton(text("New Variable"));
-        JButton deleteButton = new JButton(text("Delete Selected"));
-        JButton moreButton = new JButton(text("More..."));
+        JButton addButton = new JButton(text("Add..."));
+        JButton clearAllButton = new JButton(text("Clear All"));
 
-        addFolderButton.addActionListener(e -> createFolderDialog());
-        addButton.addActionListener(e -> createVariableDialog(null));
+        JPopupMenu addMenu = new JPopupMenu();
+        JMenuItem addVariableItem = new JMenuItem(text("New Variable"));
+        addVariableItem.addActionListener(e -> createVariableDialog(null));
+        JMenuItem addFolderItem = new JMenuItem(text("New Folder"));
+        addFolderItem.addActionListener(e -> createFolderDialog());
+        JMenuItem setupTotpItem = new JMenuItem(text("Add 2FA variable"));
+        setupTotpItem.setToolTipText(text("Creates a variable whose value is a 2FA code computed from a secret."));
+        setupTotpItem.addActionListener(e -> showTotpSetupDialog(selectedFolderId()));
 
-        deleteButton.addActionListener(e -> deleteSelectedNodes());
+        addMenu.add(addVariableItem);
+        addMenu.add(addFolderItem);
+        addMenu.addSeparator();
+        addMenu.add(setupTotpItem);
 
-        JMenuItem clearAllItem = new JMenuItem(text("Clear All"));
-        clearAllItem.addActionListener(e -> {
+        addButton.addActionListener(e -> addMenu.show(addButton, 0, addButton.getHeight()));
+
+        clearAllButton.addActionListener(e -> {
             if (confirmDialog(text("Are you sure you want to clear all variables?"), text("Confirm Clear"), JOptionPane.QUESTION_MESSAGE)) {
                 synchronized (lock) {
                     variableNames.clear();
@@ -736,24 +744,13 @@ public final class VariableManager {
                 clearRuleFields();
             }
         });
-        JMenuItem setupTotpItem = new JMenuItem(text("Setup 2FA"));
-        setupTotpItem.setToolTipText(text("Creates a variable whose value is a 2FA code computed from a secret."));
-        setupTotpItem.addActionListener(e -> showTotpSetupDialog(selectedFolderId()));
 
-        JPopupMenu moreMenu = new JPopupMenu();
-        moreMenu.add(setupTotpItem);
-        moreMenu.addSeparator();
-        moreMenu.add(clearAllItem);
-        moreButton.addActionListener(e -> moreMenu.show(moreButton, 0, moreButton.getHeight()));
-
-        buttonPanel.add(addFolderButton);
         buttonPanel.add(addButton);
-        buttonPanel.add(deleteButton);
-        buttonPanel.add(moreButton);
+        buttonPanel.add(clearAllButton);
         leftPanel.add(buttonPanel, BorderLayout.SOUTH);
 
         // The button row is what decides how narrow this side may get: without a minimum the
-        // split pane opens on the table's preferred width and clips "More...".
+        // split pane opens on the table's preferred width and clips buttons.
         int leftPanelMinimumWidth = buttonPanel.getPreferredSize().width + 20;
         leftPanel.setMinimumSize(new Dimension(leftPanelMinimumWidth, 150));
         leftPanel.setPreferredSize(new Dimension(
@@ -3241,7 +3238,7 @@ public final class VariableManager {
 
     private void showTotpSetupDialog(String preselectedFolderId) {
         Frame suiteFrame = api.userInterface().swingUtils().suiteFrame();
-        JDialog dialog = new JDialog(suiteFrame, text("Setup 2FA"), Dialog.ModalityType.APPLICATION_MODAL);
+        JDialog dialog = new JDialog(suiteFrame, text("Add 2FA Variable"), Dialog.ModalityType.APPLICATION_MODAL);
         dialog.setLayout(new BorderLayout(10, 10));
 
         JPanel form = new JPanel(new GridBagLayout());
@@ -3487,8 +3484,19 @@ public final class VariableManager {
         move.setEnabled(canMove);
         move.addActionListener(e -> SwingUtilities.invokeLater(() -> showMoveDialogForSelected(selectedVariables, selectedFolders)));
 
-        JMenuItem add = new JMenuItem(text("New Variable"));
-        add.addActionListener(e -> createVariableDialog(selectedFolderId()));
+        JMenu addSubMenu = new JMenu(text("Add..."));
+        JMenuItem addVariable = new JMenuItem(text("New Variable"));
+        addVariable.addActionListener(e -> createVariableDialog(selectedFolderId()));
+        JMenuItem addFolder = new JMenuItem(text("New Folder"));
+        addFolder.addActionListener(e -> createFolderDialog());
+        JMenuItem setupTotp = new JMenuItem(text("Add 2FA variable"));
+        setupTotp.setToolTipText(text("Creates a variable whose value is a 2FA code computed from a secret."));
+        setupTotp.addActionListener(e -> showTotpSetupDialog(selectedFolderId()));
+
+        addSubMenu.add(addVariable);
+        addSubMenu.add(addFolder);
+        addSubMenu.addSeparator();
+        addSubMenu.add(setupTotp);
 
         JMenuItem delete = new JMenuItem(text("Delete"));
         delete.setEnabled(canDelete);
@@ -3498,7 +3506,7 @@ public final class VariableManager {
         menu.add(copy);
         menu.add(move);
         menu.addSeparator();
-        menu.add(add);
+        menu.add(addSubMenu);
         menu.add(delete);
         return menu;
     }
