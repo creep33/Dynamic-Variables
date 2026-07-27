@@ -214,8 +214,8 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         cancelButton.addActionListener(e -> dialog.dispose());
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
-        buttons.add(applyButton);
         buttons.add(cancelButton);
+        buttons.add(applyButton);
 
         dialog.add(previewPanel, BorderLayout.CENTER);
         dialog.add(buttons, BorderLayout.SOUTH);
@@ -421,8 +421,8 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         previewPanel.add(new JScrollPane(preview), BorderLayout.CENTER);
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
-        buttons.add(applyButton);
         buttons.add(cancelButton);
+        buttons.add(applyButton);
 
         dialog.add(choices, BorderLayout.NORTH);
         dialog.add(previewPanel, BorderLayout.CENTER);
@@ -1106,9 +1106,9 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
             String qualifiedName = variableManager.qualifyVariableName(folderName, varName);
             if (variableManager.getVariables().containsKey(qualifiedName)) {
                 Object[] options = {
+                        text("Cancel"),
                         text("Update existing variable"),
-                        text("Create with another name"),
-                        text("Cancel")
+                        text("Create with another name")
                 };
                 int choice = JOptionPane.showOptionDialog(
                         dialog,
@@ -1120,14 +1120,14 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                         JOptionPane.QUESTION_MESSAGE,
                         null,
                         options,
-                        options[0]);
-                if (choice == 1) {
+                        options[1]);
+                if (choice == 2) {
                     String alternativeName = requestAlternativeVariableName(
                             dialog, folderName, varName);
                     if (alternativeName == null) return;
                     varName = alternativeName;
                     nameComboBox.getEditor().setItem(varName);
-                } else if (choice != 0) {
+                } else if (choice != 1) {
                     return;
                 }
             }
@@ -1181,8 +1181,8 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
 
         cancelButton.addActionListener(al -> dialog.dispose());
 
-        buttonPanel.add(saveButton);
         buttonPanel.add(cancelButton);
+        buttonPanel.add(saveButton);
 
         dialog.add(dialogTabs, BorderLayout.CENTER);
         dialog.add(buttonPanel, BorderLayout.SOUTH);
@@ -1318,8 +1318,8 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
         JButton cancel = new JButton(text("Cancel"));
         cancel.addActionListener(e -> selector.dispose());
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 6));
-        buttons.add(useSelection);
         buttons.add(cancel);
+        buttons.add(useSelection);
         selector.add(buttons, BorderLayout.SOUTH);
         selector.setVisible(true);
         selectionTimer.stop();

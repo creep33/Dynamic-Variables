@@ -51,3 +51,6 @@ When modifying this repository, strictly adhere to the following rules:
    - Every `JDialog`, `JOptionPane`, or popup must set its parent window using `api.userInterface().swingUtils().suiteFrame()` or an appropriate parent container component.
 5. **Memory & Performance**:
    - Do not retain long-term references to large `HttpRequestResponse` objects or Proxy history. Use minimal representations (such as `LatestRequestTracker` or Base64 request templates).
+6. **UI Button Layout Consistency**:
+   - In all dialogs, forms, and prompt panels, action buttons must be consistently positioned: **Cancel / Refuse** buttons (Cancel, Cancelar, No, etc.) must ALWAYS be placed on the **left**, and **Confirm / Accept / OK / Create / Save / Apply** buttons (Aceptar, OK, Crear, Guardar, Aplicar, Yes, etc.) must ALWAYS be placed on the **right**.
+

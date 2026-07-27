@@ -140,7 +140,6 @@ public final class VariableManager {
     private JComboBox<Integer> totpDigitsComboBox;
     private JTextField totpPeriodField;
     private JComboBox<String> totpAlgorithmComboBox;
-    private JButton saveTotpConfigButton;
 
     public VariableManager(MontoyaApi api) {
         this.api = api;
@@ -1259,36 +1258,33 @@ public final class VariableManager {
         tgbc.gridx = 0; tgbc.gridy = 0; tgbc.weightx = 0.0;
         totpConfigPanel.add(new JLabel(text("2FA Secret (Base32):")), tgbc);
         totpSecretField = new JTextField(24);
+        totpSecretField.getDocument().addDocumentListener(new SimpleDocumentListener(this::saveTotpConfig));
         tgbc.gridx = 1; tgbc.weightx = 1.0;
         totpConfigPanel.add(totpSecretField, tgbc);
 
         tgbc.gridx = 0; tgbc.gridy = 1; tgbc.weightx = 0.0;
         totpConfigPanel.add(new JLabel(text("Digits:")), tgbc);
         totpDigitsComboBox = new JComboBox<>(new Integer[]{6, 7, 8});
+        totpDigitsComboBox.addActionListener(e -> saveTotpConfig());
         tgbc.gridx = 1; tgbc.weightx = 1.0;
         totpConfigPanel.add(totpDigitsComboBox, tgbc);
 
         tgbc.gridx = 0; tgbc.gridy = 2; tgbc.weightx = 0.0;
         totpConfigPanel.add(new JLabel(text("Period (seconds):")), tgbc);
         totpPeriodField = new JTextField(String.valueOf(TotpGenerator.DEFAULT_PERIOD_SECONDS), 10);
+        totpPeriodField.getDocument().addDocumentListener(new SimpleDocumentListener(this::saveTotpConfig));
         tgbc.gridx = 1; tgbc.weightx = 1.0;
         totpConfigPanel.add(totpPeriodField, tgbc);
 
         tgbc.gridx = 0; tgbc.gridy = 3; tgbc.weightx = 0.0;
         totpConfigPanel.add(new JLabel(text("Algorithm:")), tgbc);
         totpAlgorithmComboBox = new JComboBox<>(new String[]{"SHA1", "SHA256", "SHA512"});
+        totpAlgorithmComboBox.addActionListener(e -> saveTotpConfig());
         tgbc.gridx = 1; tgbc.weightx = 1.0;
         totpConfigPanel.add(totpAlgorithmComboBox, tgbc);
 
-        tgbc.gridx = 1; tgbc.gridy = 4; tgbc.weightx = 1.0;
-        saveTotpConfigButton = new JButton(text("Save Changes"));
-        saveTotpConfigButton.addActionListener(e -> saveTotpConfig());
-        JPanel saveButtonWrapper = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        saveButtonWrapper.add(saveTotpConfigButton);
-        totpConfigPanel.add(saveButtonWrapper, tgbc);
-
         // Vertical filler
-        tgbc.gridx = 0; tgbc.gridy = 5; tgbc.weighty = 1.0; tgbc.gridwidth = 2;
+        tgbc.gridx = 0; tgbc.gridy = 4; tgbc.weighty = 1.0; tgbc.gridwidth = 2;
         totpConfigPanel.add(new JPanel(), tgbc);
 
         JPanel totpContainer = new JPanel(new BorderLayout());
@@ -1649,6 +1645,7 @@ public final class VariableManager {
         // is never extracted from a response nor replayed during session recovery.
         boolean totpVariable = selectedDefinition != null && selectedDefinition.isTotpVariable();
 
+        isUpdatingUI = true;
         setTotpDetailsVisible(totpVariable);
 
         if (totpVariable && selectedDefinition != null) {
@@ -1659,7 +1656,6 @@ public final class VariableManager {
             totpAlgorithmComboBox.setSelectedItem(cfg.algorithm());
         }
 
-        isUpdatingUI = true;
         valueTextArea.setText(val);
         valueTextArea.setEnabled(!totpVariable);
         valueTextArea.setToolTipText(totpVariable ? text("Computed from the 2FA secret.") : null);
@@ -2255,9 +2251,9 @@ public final class VariableManager {
 
             cancelButton.addActionListener(e -> editDialog.dispose());
 
+            buttonPanel.add(cancelButton);
             buttonPanel.add(copyButton);
             buttonPanel.add(saveButton);
-            buttonPanel.add(cancelButton);
             editDialog.add(buttonPanel, BorderLayout.SOUTH);
 
             editDialog.setVisible(true);
@@ -2540,8 +2536,8 @@ public final class VariableManager {
         });
 
         cancelBtn.addActionListener(al -> selectorDialog.dispose());
-        buttonPanel.add(saveBtn);
         buttonPanel.add(cancelBtn);
+        buttonPanel.add(saveBtn);
 
         // Put panels together
         JPanel wrapperPanel = new JPanel(new BorderLayout(5, 5));
@@ -3021,6 +3017,7 @@ public final class VariableManager {
     }
 
     private void saveTotpConfig() {
+        if (isUpdatingUI) return;
         int selectedRow = variablesTable.getSelectedRow();
         if (selectedRow < 0) return;
         String name = tableModel.variableKeyAt(selectedRow);
@@ -3029,23 +3026,16 @@ public final class VariableManager {
         if (definition == null || !definition.isTotpVariable()) return;
 
         String secret = totpSecretField.getText().trim();
-        try {
-            TotpGenerator.decodeBase32(secret);
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(mainPanel,
-                    text("Invalid 2FA secret. Use Base32 characters (A-Z, 2-7)."),
-                    text("Error"), JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        int digits = (Integer) totpDigitsComboBox.getSelectedItem();
-        int period = 30;
+        int digits = totpDigitsComboBox.getSelectedItem() != null
+                ? (Integer) totpDigitsComboBox.getSelectedItem() : TotpGenerator.DEFAULT_DIGITS;
+        int period = TotpGenerator.DEFAULT_PERIOD_SECONDS;
         try {
             period = Integer.parseInt(totpPeriodField.getText().trim());
-            if (period <= 0) period = 30;
+            if (period <= 0) period = TotpGenerator.DEFAULT_PERIOD_SECONDS;
         } catch (NumberFormatException ignored) {}
 
-        String algorithm = (String) totpAlgorithmComboBox.getSelectedItem();
+        String algorithm = totpAlgorithmComboBox.getSelectedItem() != null
+                ? (String) totpAlgorithmComboBox.getSelectedItem() : TotpGenerator.DEFAULT_ALGORITHM;
 
         TotpGenerator.TotpConfig newConfig = new TotpGenerator.TotpConfig(secret, digits, period, algorithm);
         definition.setTotpConfig(newConfig);
@@ -3053,9 +3043,14 @@ public final class VariableManager {
         synchronized (lock) {
             refreshTotpValues();
         }
-        updateDetailsPanel(selectedRow);
-        tableModel.fireTableDataChanged();
-        showTemporaryStatus(text("2FA configuration updated."));
+        isUpdatingUI = true;
+        try {
+            String val = values.getOrDefault(name, "");
+            valueTextArea.setText(val);
+        } finally {
+            isUpdatingUI = false;
+        }
+        tableModel.fireTableCellUpdated(selectedRow, 1);
     }
 
     private void rotateSelectedTotpValue() {
@@ -3185,7 +3180,7 @@ public final class VariableManager {
         JButton yesButton = new JButton(buttonText("OptionPane.yesButtonText", "Yes"));
         JButton noButton = new JButton(buttonText("OptionPane.noButtonText", "No"));
         JOptionPane optionPane = new JOptionPane(message, messageType, JOptionPane.YES_NO_OPTION,
-                null, new Object[]{yesButton, noButton}, yesButton);
+                null, new Object[]{noButton, yesButton}, yesButton);
         yesButton.addActionListener(e -> optionPane.setValue(JOptionPane.YES_OPTION));
         noButton.addActionListener(e -> optionPane.setValue(JOptionPane.NO_OPTION));
 
@@ -3492,8 +3487,8 @@ public final class VariableManager {
         });
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
-        buttons.add(createButton);
         buttons.add(cancelButton);
+        buttons.add(createButton);
 
         dialog.add(form, BorderLayout.CENTER);
         dialog.add(buttons, BorderLayout.SOUTH);
@@ -3824,19 +3819,19 @@ public final class VariableManager {
                     .filter(v -> folder.getId().equals(v.getFolderId()) && !varsToDelete.contains(v))
                     .toList();
             if (!children.isEmpty()) {
-                String[] options = {text("Move variables to Ungrouped"), text("Delete folder and variables"), text("Cancel")};
-                // Enter takes the first option: it lets the deletion go through without destroying
+                String[] options = {text("Cancel"), text("Move variables to Ungrouped"), text("Delete folder and variables")};
+                // Enter takes the second option (index 1): it lets the deletion go through without destroying
                 // the variables that were never selected.
                 int choice = optionDialog(
                         text("Folder '") + folder.getName() + text("' contains ") + children.size() + text(" variables not selected for deletion."),
-                        text("Delete Folder"), JOptionPane.WARNING_MESSAGE, options, 0);
-                if (choice == 0) {
+                        text("Delete Folder"), JOptionPane.WARNING_MESSAGE, options, 1);
+                if (choice == 1) {
                     int rootPosition = countVariablesInFolder(null);
                     for (VariableDefinition child : children) {
                         child.setFolderId(null);
                         child.setPosition(rootPosition++);
                     }
-                } else if (choice == 1) {
+                } else if (choice == 2) {
                     definitions.removeAll(children);
                 } else {
                     return;
