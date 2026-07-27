@@ -25,6 +25,8 @@ import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
@@ -720,8 +722,7 @@ public final class VariableManager {
 
         JMenuItem clearAllItem = new JMenuItem(text("Clear All"));
         clearAllItem.addActionListener(e -> {
-            int confirm = JOptionPane.showConfirmDialog(mainPanel, text("Are you sure you want to clear all variables?"), text("Confirm Clear"), JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
+            if (confirmDialog(text("Are you sure you want to clear all variables?"), text("Confirm Clear"), JOptionPane.QUESTION_MESSAGE)) {
                 synchronized (lock) {
                     variableNames.clear();
                     values.clear();
@@ -1817,10 +1818,8 @@ public final class VariableManager {
         String name = tableModel.variableKeyAt(selectedRow);
         int targetIndex = extractionZoneComboBox.getSelectedIndex();
         if (name == null || targetIndex < 0) return;
-        int confirmation = JOptionPane.showConfirmDialog(
-                mainPanel, text("Remove the selected extraction zone?"),
-                text("Remove Zone"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (confirmation != JOptionPane.YES_OPTION) return;
+        if (!confirmDialog(text("Remove the selected extraction zone?"),
+                text("Remove Zone"), JOptionPane.WARNING_MESSAGE)) return;
 
         synchronized (lock) {
             VariableExtractionRule existingRule = rules.get(name);
@@ -3074,6 +3073,83 @@ public final class VariableManager {
         return selected.variable == null ? null : selected.variable.getFolderId();
     }
 
+    /**
+     * Yes/No confirmation whose Enter key accepts. {@link JOptionPane#showConfirmDialog} focuses the
+     * affirmative button and even installs it as the default button, yet Enter still does nothing,
+     * so the buttons are built here and the key is bound on the dialog's root pane.
+     *
+     * @return {@code true} only when the user accepted; No, Escape and closing the window all
+     *         return {@code false}.
+     */
+    private boolean confirmDialog(Object message, String title, int messageType) {
+        JButton yesButton = new JButton(buttonText("OptionPane.yesButtonText", "Yes"));
+        JButton noButton = new JButton(buttonText("OptionPane.noButtonText", "No"));
+        JOptionPane optionPane = new JOptionPane(message, messageType, JOptionPane.YES_NO_OPTION,
+                null, new Object[]{yesButton, noButton}, yesButton);
+        yesButton.addActionListener(e -> optionPane.setValue(JOptionPane.YES_OPTION));
+        noButton.addActionListener(e -> optionPane.setValue(JOptionPane.NO_OPTION));
+
+        JDialog dialog = optionPane.createDialog(mainPanel, title);
+        acceptOnEnter(dialog, yesButton, () -> optionPane.setValue(JOptionPane.YES_OPTION));
+        dialog.setVisible(true);
+        dialog.dispose();
+        return Integer.valueOf(JOptionPane.YES_OPTION).equals(optionPane.getValue());
+    }
+
+    /**
+     * Multiple-choice variant of {@link #confirmDialog}. Enter picks {@code defaultIndex}.
+     *
+     * @return the index of the chosen option, or {@link JOptionPane#CLOSED_OPTION} if the dialog was
+     *         dismissed with Escape or the window close button.
+     */
+    private int optionDialog(Object message, String title, int messageType, String[] options, int defaultIndex) {
+        JButton[] buttons = new JButton[options.length];
+        for (int i = 0; i < options.length; i++) buttons[i] = new JButton(options[i]);
+        JOptionPane optionPane = new JOptionPane(message, messageType, JOptionPane.DEFAULT_OPTION,
+                null, buttons, buttons[defaultIndex]);
+        for (int i = 0; i < buttons.length; i++) {
+            int index = i;
+            buttons[i].addActionListener(e -> optionPane.setValue(index));
+        }
+
+        JDialog dialog = optionPane.createDialog(mainPanel, title);
+        acceptOnEnter(dialog, buttons[defaultIndex], () -> optionPane.setValue(defaultIndex));
+        dialog.setVisible(true);
+        dialog.dispose();
+        Object result = optionPane.getValue();
+        return result instanceof Integer choice ? choice : JOptionPane.CLOSED_OPTION;
+    }
+
+    /**
+     * Makes Enter run {@code action} on a dialog. All three steps are needed: the focus has to land
+     * on a component, because a dialog whose focus owner is the window itself never processes
+     * {@code WHEN_IN_FOCUSED_WINDOW} bindings, and the binding in turn covers the cases where the
+     * default button alone does not fire.
+     */
+    private static void acceptOnEnter(JDialog dialog, JButton acceptButton, Runnable action) {
+        dialog.getRootPane().setDefaultButton(acceptButton);
+        dialog.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "acceptDialog");
+        dialog.getRootPane().getActionMap().put("acceptDialog", new AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                action.run();
+            }
+        });
+        dialog.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowOpened(WindowEvent e) {
+                acceptButton.requestFocusInWindow();
+            }
+        });
+    }
+
+    /** Keeps the look and feel's own button wording, which is already localized. */
+    private static String buttonText(String uiKey, String fallback) {
+        String label = UIManager.getString(uiKey);
+        return label == null || label.isEmpty() ? fallback : label;
+    }
+
     private void createFolderDialog() {
         String name = JOptionPane.showInputDialog(mainPanel, text("Folder name:"), text("New Folder"), JOptionPane.PLAIN_MESSAGE);
         if (name == null) return;
@@ -3122,9 +3198,22 @@ public final class VariableManager {
         gbc.gridx = 1; gbc.weightx = 1.0;
         form.add(nameField, gbc);
 
-        int choice = JOptionPane.showConfirmDialog(mainPanel, form, text("New Variable"),
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (choice != JOptionPane.OK_OPTION) return;
+        // Built by hand instead of showConfirmDialog: a text field embedded in a message panel
+        // never gets the initial focus that showInputDialog gives its own field, and Enter has
+        // to mean "create" the way it used to.
+        JOptionPane optionPane = new JOptionPane(form, JOptionPane.PLAIN_MESSAGE, JOptionPane.OK_CANCEL_OPTION) {
+            @Override
+            public void selectInitialValue() {
+                nameField.requestFocusInWindow();
+            }
+        };
+        JDialog dialog = optionPane.createDialog(mainPanel, text("New Variable"));
+        nameField.addActionListener(e -> optionPane.setValue(JOptionPane.OK_OPTION));
+        dialog.setVisible(true);
+        dialog.dispose();
+
+        Object result = optionPane.getValue();
+        if (!(result instanceof Integer choice) || choice != JOptionPane.OK_OPTION) return;
 
         String name = nameField.getText().trim();
         if (!validNewName(name, "Variable")) return;
@@ -3310,6 +3399,14 @@ public final class VariableManager {
         dialog.add(buttons, BorderLayout.SOUTH);
         dialog.pack();
         dialog.setLocationRelativeTo(suiteFrame);
+        // Without these the focus lands on the folder combo box and Enter does nothing.
+        dialog.getRootPane().setDefaultButton(createButton);
+        dialog.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowOpened(WindowEvent e) {
+                nameField.requestFocusInWindow();
+            }
+        });
         previewTimer.start();
         dialog.setVisible(true);
         previewTimer.stop();
@@ -3609,18 +3706,19 @@ public final class VariableManager {
             message = text("Delete ") + targetRows.size() + text(" selected items?");
         }
 
-        if (JOptionPane.showConfirmDialog(mainPanel, message, text("Delete Selected"),
-                JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+        if (!confirmDialog(message, text("Delete Selected"), JOptionPane.QUESTION_MESSAGE)) return;
 
         for (VariableFolder folder : foldersToDelete) {
             List<VariableDefinition> children = definitions.stream()
                     .filter(v -> folder.getId().equals(v.getFolderId()) && !varsToDelete.contains(v))
                     .toList();
             if (!children.isEmpty()) {
-                Object[] options = {text("Move variables to Ungrouped"), text("Delete folder and variables"), text("Cancel")};
-                int choice = JOptionPane.showOptionDialog(mainPanel,
+                String[] options = {text("Move variables to Ungrouped"), text("Delete folder and variables"), text("Cancel")};
+                // Enter takes the first option: it lets the deletion go through without destroying
+                // the variables that were never selected.
+                int choice = optionDialog(
                         text("Folder '") + folder.getName() + text("' contains ") + children.size() + text(" variables not selected for deletion."),
-                        text("Delete Folder"), JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[2]);
+                        text("Delete Folder"), JOptionPane.WARNING_MESSAGE, options, 0);
                 if (choice == 0) {
                     int rootPosition = countVariablesInFolder(null);
                     for (VariableDefinition child : children) {
