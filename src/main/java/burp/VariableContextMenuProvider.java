@@ -1501,7 +1501,7 @@ public class VariableContextMenuProvider implements ContextMenuItemsProvider {
                 .orElse(null);
     }
 
-    private String folderEditorText(JComboBox<String> folderComboBox) {
+    static String folderEditorText(JComboBox<String> folderComboBox) {
         Object editorValue = folderComboBox.getEditor().getItem();
         return editorValue == null ? "" : editorValue.toString().trim();
     }

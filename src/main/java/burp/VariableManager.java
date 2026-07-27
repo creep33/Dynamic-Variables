@@ -3298,28 +3298,173 @@ public final class VariableManager {
      * @param preselectedFolderId folder to start on, or {@code null} to start on Ungrouped.
      *                            The table's context menu passes the folder that was clicked.
      */
+    private static class FolderSelector {
+        final JComboBox<String> comboBox;
+        final JButton createButton;
+        final JPanel panel;
+        final List<String> folderNames;
+
+        FolderSelector(JComboBox<String> comboBox, JButton createButton, JPanel panel, List<String> folderNames) {
+            this.comboBox = comboBox;
+            this.createButton = createButton;
+            this.panel = panel;
+            this.folderNames = folderNames;
+        }
+
+        String resolveSelectedFolderName(VariableManager manager, Component parentComponent) {
+            String folderInput = VariableContextMenuProvider.folderEditorText(comboBox);
+            String folderName = VariableContextMenuProvider.existingFolderName(
+                    folderNames, folderInput, manager.text("Ungrouped"));
+            if (folderName == null) {
+                if (!VariableNames.isValidComponent(folderInput)) {
+                    JOptionPane.showMessageDialog(parentComponent,
+                            manager.text("Folder") + manager.text(" names may only contain letters, numbers and _."),
+                            manager.text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+                    return null;
+                }
+                try {
+                    manager.createFolder(folderInput);
+                    folderName = folderInput;
+                } catch (IllegalStateException duplicate) {
+                    folderName = VariableContextMenuProvider.existingFolderName(
+                            manager.getFolderNames(), folderInput, manager.text("Ungrouped"));
+                } catch (IllegalArgumentException invalid) {
+                    JOptionPane.showMessageDialog(parentComponent,
+                            manager.text("Folder") + manager.text(" names may only contain letters, numbers and _."),
+                            manager.text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+                    return null;
+                }
+            }
+            return folderName;
+        }
+    }
+
+    private FolderSelector buildFolderSelectorPanel(String preselectedFolderId, Component parentComponent) {
+        List<String> folderNames = new ArrayList<>(getFolderNames());
+        JComboBox<String> folderComboBox = new JComboBox<>();
+        folderComboBox.addItem(text("Ungrouped"));
+        for (String folderName : folderNames) folderComboBox.addItem(folderName);
+        folderComboBox.setEditable(true);
+        folderComboBox.setToolTipText(text("Search or create a folder"));
+
+        VariableFolder preselectedFolder = findFolder(preselectedFolderId);
+        if (preselectedFolder != null) {
+            folderComboBox.setSelectedItem(preselectedFolder.getName());
+            folderComboBox.getEditor().setItem(preselectedFolder.getName());
+        }
+
+        JButton createFolderButton = new JButton(text("Create folder"));
+        createFolderButton.setEnabled(false);
+        JLabel folderHint = new JLabel(text(
+                "Type to filter folders. If the name does not exist, create it here."));
+        folderHint.setForeground(UIManager.getColor("Label.disabledForeground"));
+        JPanel folderInputPanel = new JPanel(new BorderLayout(6, 2));
+        folderInputPanel.add(folderComboBox, BorderLayout.CENTER);
+        folderInputPanel.add(createFolderButton, BorderLayout.EAST);
+        folderInputPanel.add(folderHint, BorderLayout.SOUTH);
+
+        boolean[] updatingFolderSuggestions = {false};
+        Runnable updateCreateFolderButton = () -> {
+            String candidate = VariableContextMenuProvider.folderEditorText(folderComboBox);
+            boolean existing = VariableContextMenuProvider.existingFolderName(
+                    folderNames, candidate, text("Ungrouped")) != null;
+            createFolderButton.setEnabled(
+                    !candidate.isEmpty() && !existing && VariableNames.isValidComponent(candidate));
+        };
+
+        Runnable filterFolderSuggestions = () -> {
+            if (updatingFolderSuggestions[0]) return;
+            String query = VariableContextMenuProvider.folderEditorText(folderComboBox);
+            SwingUtilities.invokeLater(() -> {
+                if (updatingFolderSuggestions[0]) return;
+                updatingFolderSuggestions[0] = true;
+                try {
+                    DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
+                    for (String suggestion : VariableContextMenuProvider.filterFolderNames(
+                            folderNames, query, text("Ungrouped"))) {
+                        model.addElement(suggestion);
+                    }
+                    folderComboBox.setModel(model);
+                    folderComboBox.setSelectedItem(query);
+                    Component editor = folderComboBox.getEditor().getEditorComponent();
+                    if (editor instanceof JTextField field) {
+                        field.setText(query);
+                        field.setCaretPosition(query.length());
+                    }
+                    updateCreateFolderButton.run();
+                    if (!query.isEmpty() && model.getSize() > 0
+                            && folderComboBox.isShowing()
+                            && editor.isFocusOwner()) {
+                        folderComboBox.showPopup();
+                    }
+                } finally {
+                    updatingFolderSuggestions[0] = false;
+                }
+            });
+        };
+
+        Component folderEditor = folderComboBox.getEditor().getEditorComponent();
+        if (folderEditor instanceof JTextField folderTextField) {
+            folderTextField.getDocument().addDocumentListener(new DocumentListener() {
+                @Override
+                public void insertUpdate(DocumentEvent event) { filterFolderSuggestions.run(); }
+                @Override
+                public void removeUpdate(DocumentEvent event) { filterFolderSuggestions.run(); }
+                @Override
+                public void changedUpdate(DocumentEvent event) { filterFolderSuggestions.run(); }
+            });
+        }
+        folderComboBox.addActionListener(e -> updateCreateFolderButton.run());
+        createFolderButton.addActionListener(e -> {
+            String candidate = VariableContextMenuProvider.folderEditorText(folderComboBox);
+            if (!VariableNames.isValidComponent(candidate)) {
+                JOptionPane.showMessageDialog(parentComponent,
+                        text("Folder") + text(" names may only contain letters, numbers and _."),
+                        text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            try {
+                createFolder(candidate);
+                folderNames.add(candidate);
+                updatingFolderSuggestions[0] = true;
+                try {
+                    folderComboBox.setModel(new DefaultComboBoxModel<>(
+                            VariableContextMenuProvider.filterFolderNames(folderNames, candidate, text("Ungrouped"))
+                                    .toArray(new String[0])));
+                    folderComboBox.setSelectedItem(candidate);
+                    folderComboBox.getEditor().setItem(candidate);
+                } finally {
+                    updatingFolderSuggestions[0] = false;
+                }
+                updateCreateFolderButton.run();
+            } catch (IllegalStateException duplicate) {
+                JOptionPane.showMessageDialog(parentComponent,
+                        text("A folder with this name already exists."),
+                        text("Duplicate Folder"), JOptionPane.ERROR_MESSAGE);
+            } catch (IllegalArgumentException invalid) {
+                JOptionPane.showMessageDialog(parentComponent,
+                        text("Folder") + text(" names may only contain letters, numbers and _."),
+                        text("Invalid Name"), JOptionPane.ERROR_MESSAGE);
+            }
+        });
+
+        return new FolderSelector(folderComboBox, createFolderButton, folderInputPanel, folderNames);
+    }
+
     private void createVariableDialog(String preselectedFolderId) {
-        // Same shape as the 2FA setup dialog: pick an existing folder and type a name.
-        // Folders are created from "New Folder", never from here.
         JPanel form = new JPanel(new GridBagLayout());
-        // Painting its own background would frame the fields with Panel.background, which does
-        // not match the option pane behind it under Burp's dark theme.
         form.setOpaque(false);
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = new Insets(4, 5, 4, 5);
 
-        JComboBox<String> folderComboBox = new JComboBox<>();
-        folderComboBox.addItem(text("Ungrouped"));
-        for (String folderName : getFolderNames()) folderComboBox.addItem(folderName);
-        VariableFolder preselectedFolder = findFolder(preselectedFolderId);
-        if (preselectedFolder != null) folderComboBox.setSelectedItem(preselectedFolder.getName());
+        FolderSelector folderSelector = buildFolderSelectorPanel(preselectedFolderId, mainPanel);
         JTextField nameField = new JTextField(20);
 
         gbc.gridy = 0; gbc.gridx = 0; gbc.weightx = 0.0;
         form.add(new JLabel(text("Folder:")), gbc);
         gbc.gridx = 1; gbc.weightx = 1.0;
-        form.add(folderComboBox, gbc);
+        form.add(folderSelector.panel, gbc);
 
         gbc.gridy = 1; gbc.gridx = 0; gbc.weightx = 0.0;
         form.add(new JLabel(text("Variable name:")), gbc);
@@ -3346,8 +3491,9 @@ public final class VariableManager {
         String name = nameField.getText().trim();
         if (!validNewName(name, "Variable")) return;
 
-        String folderName = folderComboBox.getSelectedIndex() <= 0
-                ? "" : String.valueOf(folderComboBox.getSelectedItem());
+        String folderName = folderSelector.resolveSelectedFolderName(this, mainPanel);
+        if (folderName == null) return;
+
         String key;
         synchronized (lock) {
             VariableFolder folder = folderName.isEmpty() ? null : findFolderByName(folderName);
@@ -3378,16 +3524,7 @@ public final class VariableManager {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = new Insets(4, 5, 4, 5);
 
-        List<String> folderNames;
-        synchronized (lock) {
-            folderNames = folders.stream().sorted(Comparator.comparingInt(VariableFolder::getPosition))
-                    .map(VariableFolder::getName).toList();
-        }
-        JComboBox<String> folderComboBox = new JComboBox<>();
-        folderComboBox.addItem(text("Ungrouped"));
-        for (String folderName : folderNames) folderComboBox.addItem(folderName);
-        VariableFolder preselected = findFolder(preselectedFolderId);
-        if (preselected != null) folderComboBox.setSelectedItem(preselected.getName());
+        FolderSelector folderSelector = buildFolderSelectorPanel(preselectedFolderId, dialog);
 
         JTextField nameField = new JTextField(24);
         JTextField secretField = new JTextField(24);
@@ -3395,7 +3532,7 @@ public final class VariableManager {
         gbc.gridy = 0; gbc.gridx = 0; gbc.weightx = 0.0;
         form.add(new JLabel(text("Folder:")), gbc);
         gbc.gridx = 1; gbc.weightx = 1.0;
-        form.add(folderComboBox, gbc);
+        form.add(folderSelector.panel, gbc);
 
         gbc.gridy = 1; gbc.gridx = 0; gbc.weightx = 0.0;
         form.add(new JLabel(text("Variable name:")), gbc);
@@ -3489,8 +3626,8 @@ public final class VariableManager {
                 return;
             }
 
-            String folderName = folderComboBox.getSelectedIndex() <= 0
-                    ? "" : String.valueOf(folderComboBox.getSelectedItem());
+            String folderName = folderSelector.resolveSelectedFolderName(this, dialog);
+            if (folderName == null) return;
             String key;
             synchronized (lock) {
                 VariableFolder folder = folderName.isEmpty() ? null : findFolderByName(folderName);

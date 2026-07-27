@@ -99,4 +99,12 @@ class VariableContextMenuProviderTest {
         assertNull(VariableContextMenuProvider.existingFolderName(
                 folders, "New folder", "Ungrouped"));
     }
+
+    @Test
+    void extractsTrimmedTextFromFolderComboBoxEditor() {
+        javax.swing.JComboBox<String> comboBox = new javax.swing.JComboBox<>();
+        comboBox.setEditable(true);
+        comboBox.getEditor().setItem("  my_folder  ");
+        assertEquals("my_folder", VariableContextMenuProvider.folderEditorText(comboBox));
+    }
 }
