@@ -129,6 +129,7 @@ final class UiText {
             Map.entry("Legacy exact saved request matching", "Coincidencia exacta legacy con la petición guardada"),
             Map.entry("Legacy path regex matching", "Coincidencia legacy mediante regex de ruta"),
             Map.entry("Convert to explicit filters", "Convertir a filtros explícitos"),
+            Map.entry("Configure passive matching options", "Configurar opciones de coincidencia pasiva"),
             Map.entry("Autofill from saved request", "Cargar desde petición guardada"),
             Map.entry("No saved request available for this variable.", "No hay ninguna petición guardada disponible para esta variable."),
             Map.entry("Autofill Error", "Error al cargar datos"),

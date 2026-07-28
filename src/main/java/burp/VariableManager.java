@@ -88,12 +88,12 @@ public final class VariableManager {
     private JCheckBox ruleEnabledCheckBox;
     private JCheckBox automaticRefreshCheckBox;
     private JButton advancedRecoveryButton;
+    private JButton passiveMatchingButton;
     private JPanel advancedRecoveryPanel;
     private JCheckBox allowNonIdempotentReplayCheckBox;
     private JTextField matchUrlField;
     private JLabel matchStrategyLabel;
     private JButton convertMatchButton;
-    private JButton autofillMatchButton;
     private JTextField matchMethodField;
     private JTextField matchHostField;
     private JTextField matchPortField;
@@ -109,7 +109,6 @@ public final class VariableManager {
     private JTextField delimiterField;
     private JButton removeExtractionZoneButton;
     private JButton updateRuleButton;
-    private JToggleButton advancedMatchToggle;
     private JPanel advancedMatchPanel;
     private JTextField signalStatusCodesField;
     private JTextField signalHeaderRegexField;
@@ -832,12 +831,27 @@ public final class VariableManager {
                 new Font(mainPanel.getFont().getName(), Font.PLAIN, 12)
         ));
         
+        JPanel passiveTogglePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        passiveTogglePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        
         ruleEnabledCheckBox = new JCheckBox(text("Update this variable from matching responses"));
         ruleEnabledCheckBox.setToolTipText(text(
                 "Requires global response extraction and extraction for the current Burp tool to be enabled."));
         ruleEnabledCheckBox.addActionListener(e -> handleRuleActivation(ruleEnabledCheckBox, false));
-        ruleEnabledCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        rulePanel.add(ruleEnabledCheckBox);
+        
+        passiveMatchingButton = new JButton("⚙");
+        passiveMatchingButton.setToolTipText(text("Configure passive matching options"));
+        passiveMatchingButton.setMargin(new Insets(2, 4, 2, 4));
+        passiveMatchingButton.addActionListener(e -> {
+            if (advancedMatchPanel != null) {
+                showAdvancedMatchingDialog();
+            }
+        });
+        
+        passiveTogglePanel.add(ruleEnabledCheckBox);
+        passiveTogglePanel.add(Box.createHorizontalStrut(5));
+        passiveTogglePanel.add(passiveMatchingButton);
+        rulePanel.add(passiveTogglePanel);
         JLabel passiveExtractionExplanation = automationExplanationLabel(text(
                 "Matching responses update the value passively; no request is retried."));
         passiveExtractionExplanation.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -932,12 +946,6 @@ public final class VariableManager {
         removeExtractionZoneButton.addActionListener(e -> removeSelectedExtractionZone());
         extractionPanel.add(removeExtractionZoneButton, egbc);
         rulePanel.add(extractionPanel);
-
-        advancedMatchToggle = new JToggleButton(text("Show advanced automation options"));
-        advancedMatchToggle.setAlignmentX(Component.LEFT_ALIGNMENT);
-        advancedMatchToggle.setToolTipText(text(
-                "Configure passive-extraction matching and session-recovery retry safety."));
-        rulePanel.add(advancedMatchToggle);
 
         advancedMatchPanel = new JPanel(new GridBagLayout());
         advancedMatchPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -1099,11 +1107,8 @@ public final class VariableManager {
         matchStrategyLabel = new JLabel();
         convertMatchButton = new JButton(text("Convert to explicit filters"));
         convertMatchButton.addActionListener(e -> convertActiveRuleToExplicitMatch());
-        autofillMatchButton = new JButton(text("Autofill from saved request"));
-        autofillMatchButton.addActionListener(e -> autofillExplicitFiltersFromSavedRequest());
         strategyPanel.add(matchStrategyLabel);
         strategyPanel.add(convertMatchButton);
-        strategyPanel.add(autofillMatchButton);
         pgbc.gridx = 1;
         pgbc.weightx = 1.0;
         passiveMatchingPanel.add(strategyPanel, pgbc);
@@ -1225,11 +1230,6 @@ public final class VariableManager {
 
         rgbc.gridy = 1;
         advancedRecoveryPanel.add(expiryPanel, rgbc);
-
-        advancedMatchPanel.setVisible(false);
-        advancedMatchToggle.addActionListener(e ->
-                setAdvancedMatchingExpanded(advancedMatchToggle.isSelected()));
-        rulePanel.add(advancedMatchPanel);
 
         // 3. Refresh Action Panel (background request sender, edit request & send to repeater)
         JPanel refreshPanel = new JPanel(new BorderLayout(5, 5));
@@ -1621,7 +1621,6 @@ public final class VariableManager {
     private void updateDetailsPanel(int selectedRow) {
         if (selectedRow < 0) {
             if (detailsCardLayout != null) detailsCardLayout.show(detailsCards, "empty");
-            setAdvancedMatchingExpanded(false);
             setTotpDetailsVisible(false);
             isUpdatingUI = true;
             valueTextArea.setText("");
@@ -1689,6 +1688,9 @@ public final class VariableManager {
 
         ruleEnabledCheckBox.setEnabled(!totpVariable);
         ruleEnabledCheckBox.setSelected(!totpVariable && rule.isEnabled());
+        if (passiveMatchingButton != null) {
+            passiveMatchingButton.setEnabled(ruleEnabledCheckBox.isSelected());
+        }
         automaticRefreshCheckBox.setEnabled(!totpVariable);
         automaticRefreshCheckBox.setSelected(!totpVariable && rule.isAutomaticRefreshEnabled());
         if (advancedRecoveryButton != null) {
@@ -1700,17 +1702,12 @@ public final class VariableManager {
         displayExpirySignal(rule.getExpirySignal(), !totpVariable);
 
         boolean explicit = rule.getMatchStrategy() == VariableExtractionRule.MatchStrategy.EXPLICIT;
-        setAdvancedMatchingExpanded(!explicit || rule.isAllowNonIdempotentReplay()
-                || rule.getExpirySignal() != null);
         matchStrategyLabel.setText(switch (rule.getMatchStrategy()) {
             case EXPLICIT -> text("Explicit filters");
             case LEGACY_EXACT -> text("Legacy exact saved request matching");
             case LEGACY_PATH -> text("Legacy path regex matching");
         });
-        boolean hasSavedRequest = rule != null && rule.getSavedRequestBase64() != null && !rule.getSavedRequestBase64().isEmpty();
         convertMatchButton.setVisible(!explicit);
-        autofillMatchButton.setVisible(explicit);
-        autofillMatchButton.setEnabled(explicit && hasSavedRequest);
         setMatchFieldsEnabled(explicit);
         matchMethodField.setText(rule.getMatchMethod());
         matchHostField.setText(rule.getMatchHost());
@@ -1775,15 +1772,8 @@ public final class VariableManager {
         JOptionPane.showMessageDialog(mainPanel, advancedRecoveryPanel, text("Advanced Session Recovery Options"), JOptionPane.PLAIN_MESSAGE);
     }
 
-    private void setAdvancedMatchingExpanded(boolean expanded) {
-        if (advancedMatchToggle == null || advancedMatchPanel == null) return;
-        advancedMatchToggle.setSelected(expanded);
-        advancedMatchToggle.setText(text(expanded
-                ? "Hide advanced automation options"
-                : "Show advanced automation options"));
-        advancedMatchPanel.setVisible(expanded);
-        advancedMatchPanel.revalidate();
-        advancedMatchPanel.repaint();
+    private void showAdvancedMatchingDialog() {
+        JOptionPane.showMessageDialog(mainPanel, advancedMatchPanel, text("Advanced Automation Options"), JOptionPane.PLAIN_MESSAGE);
     }
 
     private void clearRuleFields() {
@@ -1797,8 +1787,6 @@ public final class VariableManager {
         displayExpirySignal(null, false);
         matchStrategyLabel.setText("");
         convertMatchButton.setVisible(false);
-        autofillMatchButton.setVisible(false);
-        autofillMatchButton.setEnabled(false);
         setMatchFieldsEnabled(false);
         matchMethodField.setText("");
         matchHostField.setText("");
@@ -1938,12 +1926,27 @@ public final class VariableManager {
         if (checkBox.isSelected()) {
             String error = activeRuleValidationError(refresh);
             if (error != null) {
-                checkBox.setSelected(false);
-                JOptionPane.showMessageDialog(mainPanel, text(error), text("Error"),
-                        JOptionPane.ERROR_MESSAGE);
+                if (!refresh) {
+                    autofillExplicitFiltersFromSavedRequest(true);
+                    error = activeRuleValidationError(refresh);
+                }
+                if (error != null) {
+                    checkBox.setSelected(false);
+                    if (!refresh) {
+                        showAdvancedMatchingDialog();
+                    } else {
+                        JOptionPane.showMessageDialog(mainPanel, text(error), text("Error"),
+                                JOptionPane.ERROR_MESSAGE);
+                    }
+                } else if (!ensureGlobalAutomationEnabled(mainPanel, refresh)) {
+                    checkBox.setSelected(false);
+                }
             } else if (!ensureGlobalAutomationEnabled(mainPanel, refresh)) {
                 checkBox.setSelected(false);
             }
+        }
+        if (passiveMatchingButton != null) {
+            passiveMatchingButton.setEnabled(ruleEnabledCheckBox.isSelected());
         }
         updateActiveRuleFromUI();
     }
@@ -2097,13 +2100,6 @@ public final class VariableManager {
         queryField.setEnabled(enabled);
         discriminatorSourceComboBox.setEnabled(enabled);
         discriminatorRegexField.setEnabled(enabled);
-        if (autofillMatchButton != null) {
-            int selectedRow = variablesTable.getSelectedRow();
-            String name = selectedRow >= 0 ? tableModel.variableKeyAt(selectedRow) : null;
-            VariableExtractionRule rule = name != null ? rules.get(name) : null;
-            boolean hasSavedRequest = rule != null && rule.getSavedRequestBase64() != null && !rule.getSavedRequestBase64().isEmpty();
-            autofillMatchButton.setEnabled(enabled && hasSavedRequest);
-        }
     }
 
     private void convertActiveRuleToExplicitMatch() {
@@ -2143,7 +2139,7 @@ public final class VariableManager {
         updateDetailsPanel(selectedRow);
     }
 
-    private void autofillExplicitFiltersFromSavedRequest() {
+    private void autofillExplicitFiltersFromSavedRequest(boolean silent) {
         int selectedRow = variablesTable.getSelectedRow();
         if (selectedRow < 0) return;
         String name = tableModel.variableKeyAt(selectedRow);
@@ -2151,7 +2147,9 @@ public final class VariableManager {
         synchronized (lock) {
             VariableExtractionRule rule = rules.get(name);
             if (rule == null || rule.getSavedRequestBase64() == null || rule.getSavedRequestBase64().isEmpty()) {
-                JOptionPane.showMessageDialog(mainPanel, text("No saved request available for this variable."), text("Autofill Error"), JOptionPane.WARNING_MESSAGE);
+                if (!silent) {
+                    JOptionPane.showMessageDialog(mainPanel, text("No saved request available for this variable."), text("Autofill Error"), JOptionPane.WARNING_MESSAGE);
+                }
                 return;
             }
 
