@@ -52,7 +52,7 @@ Dynamic Variables is a Burp Suite extension that brings template variables and a
 
 | Dynamic Variables Tab |
 |:---:|
-| ![Dynamic Variables Dashboard](images/dashboard_1.png) |
+| ![Dynamic Variables Dashboard](images/dashboard.png) |
 
 | Assign to Variable (Context Menu) | Variable usage in request |
 |:---:|:---:|
