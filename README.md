@@ -303,7 +303,14 @@ We welcome contributions from human developers and AI assistants alike! Before m
 
 ## Acknowledgements
 
-Thanks to [Mario Mansilla (@creep33)](https://github.com/creep33) for reporting the bug that caused the session refresh request to run even when the refresh option was disabled, and for suggesting the use of the *Pretty* format instead of *Raw* in some request dialogs.
+Special thanks to **[Mario Mansilla (@creep33)](https://github.com/creep33)** for his outstanding contributions to the project:
+- Reporting the bug that caused the session refresh request to run even when the refresh option was disabled, and suggesting the *Pretty* format instead of *Raw* in request dialogs.
+- Designing and implementing major features and enhancements, including:
+  - **2FA (TOTP) Variables**: On-demand calculation of 2FA codes from Base32 secrets (RFC 6238/4226) without background timers.
+  - **Context Menu Variable Insertion**: Inserting placeholders directly from the editor's right-click menu, grouped by folders.
+  - **Configurable Session Expiry Signals**: Fine-grained expiry detection matching HTTP status codes, header filters, body filters, and logical inversion.
+  - **Folder Selector on Creation**: Assigning variables to folders directly upon creation.
+  - **Networking & Usability Improvements**: Routing multi-value extraction requests through Burp's Montoya HTTP engine, crafting refresh requests from scratch, strict variable name validation (`[A-Za-z0-9_]+`), custom folder rename fix, and Enter key confirmations for dialogs.
 
 ---
 

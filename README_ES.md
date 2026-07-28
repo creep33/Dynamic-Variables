@@ -315,7 +315,14 @@ Una ejecución correcta termina con `BUILD SUCCESSFUL`. Gradle escribe el inform
 
 ## Agradecimientos
 
-Gracias a [Mario Mansilla (@creep33)](https://github.com/creep33) por reportar el bug que provocaba que la petición de actualización de la sesión se ejecutara aunque la opción de refresco estuviera deshabilitada, y por sugerir el uso del formato *Pretty* en lugar de *Raw* en algunos cuadros de peticiones.
+Agradecimiento especial a **[Mario Mansilla (@creep33)](https://github.com/creep33)** por sus extraordinarias contribuciones al proyecto:
+- Reportar el bug que provocaba que la petición de actualización de la sesión se ejecutara aunque la opción de refresco estuviera deshabilitada, y sugerir el uso del formato *Pretty* en lugar de *Raw* en algunos cuadros de peticiones.
+- Diseñar e implementar importantes funcionalidades y mejoras, incluyendo:
+  - **Variables 2FA (TOTP)**: Cálculo bajo demanda de códigos 2FA a partir de secretos Base32 (RFC 6238/4226) sin temporizadores en segundo plano.
+  - **Inserción de variables desde el menú contextual**: Inserción directa de marcadores desde el menú secundario del editor, agrupados por carpetas.
+  - **Señal configurable de expiración de sesión**: Detección avanzada de sesiones expiradas mediante reglas sobre códigos de estado, filtros de cabeceras/cuerpo e inversión lógica.
+  - **Selector de carpeta al crear variables**: Asignación directa de variables a carpetas existentes o nuevas desde el diálogo de creación.
+  - **Mejoras de red y usabilidad**: Peticiones de extracción múltiple canalizadas a través de la pila HTTP Montoya de Burp, creación de peticiones de refresco desde cero, validación estricta de nombres (`[A-Za-z0-9_]+`), corrección del renombrado dentro de carpetas personalizadas y confirmación con la tecla Enter en diálogos.
 
 ---
 
