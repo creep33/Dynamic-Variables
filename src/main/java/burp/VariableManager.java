@@ -3527,13 +3527,35 @@ public final class VariableManager {
         // Built by hand instead of showConfirmDialog: a text field embedded in a message panel
         // never gets the initial focus that showInputDialog gives its own field, and Enter has
         // to mean "create" the way it used to.
-        JOptionPane optionPane = new JOptionPane(form, JOptionPane.PLAIN_MESSAGE, JOptionPane.OK_CANCEL_OPTION) {
+        //
+        // A plain JOptionPane is mandatory here. Subclassing it, even anonymously, makes
+        // UIDefaults.getUI() resolve the look and feel's OptionPaneUI through the extension's class
+        // loader, which cannot see the look and feel Burp bundles. The lookup fails silently, no UI
+        // is installed, and the dialog opens tiny and empty until some other plain JOptionPane has
+        // warmed the UIDefaults class cache.
+        JButton okButton = new JButton(buttonText("OptionPane.okButtonText", "OK"));
+        JButton cancelButton = new JButton(buttonText("OptionPane.cancelButtonText", "Cancel"));
+        JOptionPane optionPane = new JOptionPane(form, JOptionPane.PLAIN_MESSAGE, JOptionPane.OK_CANCEL_OPTION,
+                null, new Object[]{cancelButton, okButton}, okButton);
+        okButton.addActionListener(e -> optionPane.setValue(JOptionPane.OK_OPTION));
+        cancelButton.addActionListener(e -> optionPane.setValue(JOptionPane.CANCEL_OPTION));
+
+        JDialog dialog = optionPane.createDialog(mainPanel, text("New Variable"));
+
+        // JOptionPane focuses its own initial value from a windowGainedFocus listener that runs
+        // after windowOpened, so acceptOnEnter's windowOpened hook would lose the race. Listeners
+        // fire in registration order, so this one is added after createDialog and has the last
+        // word. The flag keeps it from stealing focus back when a nested dialog closes.
+        boolean[] initialFocusDone = {false};
+        dialog.addWindowFocusListener(new WindowAdapter() {
             @Override
-            public void selectInitialValue() {
+            public void windowGainedFocus(WindowEvent e) {
+                if (initialFocusDone[0]) return;
+                initialFocusDone[0] = true;
                 nameField.requestFocusInWindow();
             }
-        };
-        JDialog dialog = optionPane.createDialog(mainPanel, text("New Variable"));
+        });
+
         nameField.addActionListener(e -> optionPane.setValue(JOptionPane.OK_OPTION));
         dialog.setVisible(true);
         dialog.dispose();
